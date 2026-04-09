@@ -1,0 +1,11 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+api = { version = "0.1.0", path = "../api" }
+clap = { version = "4.6.0", features = ["derive"] }
+spritz-core = { version = "0.1.0", path = "../core" }
+tokio = { version = "1.51.1", features = ["full"] }

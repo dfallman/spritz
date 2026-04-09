@@ -1,0 +1,2 @@
+[alias]
+lint = "clippy --workspace --all-targets --all-features -- -W clippy::pedantic -W clippy::nursery"
