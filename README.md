@@ -21,7 +21,6 @@ SSDP: listening on 239.255.255.250:1900
 
 DLNA clients — smart TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and the like — should see it appear in their network sources within a few seconds.
 
----
 
 # What is Spritz?
 
