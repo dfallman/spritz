@@ -7,7 +7,8 @@ edition = "2024"
 anyhow = "1.0.102"
 axum = "0.8.8"
 httpdate = "1.0"
-socket2 = "0.5"
+if-addrs = "0.15"
+socket2 = "0.6"
 spritz-core = { version = "0.1.0", path = "../core" }
 tokio = { version = "1.51.1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }

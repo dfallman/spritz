@@ -33,10 +33,10 @@ Your Smart TV, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and any other DLNA
 
 ### From source
 
-Requires Rust 1.85+ (edition 2024).
+Get the latest Rust from [Rustup](https://rustup.rs/).
 
 ```bash
-git clone https://github.com/you/spritz
+git clone https://github.com/dfallman/spritz
 cd spritz
 cargo install --path cli
 ```

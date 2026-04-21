@@ -65,9 +65,20 @@ fn create_socket(local_ip: Ipv4Addr) -> anyhow::Result<UdpSocket> {
 	let bind_addr = socket2::SockAddr::from(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 1900u16)));
 	socket.bind(&bind_addr)?;
 
-	let multicast_ip: Ipv4Addr = "239.255.255.250".parse()?;
-	socket.join_multicast_v4(&multicast_ip, &local_ip)?;
+	// Explicitly route outgoing multicast through the LAN interface.
+	socket.set_multicast_if_v4(&local_ip)?;
 	socket.set_multicast_loop_v4(false)?;
+
+	// Join the multicast group on every non-loopback IPv4 interface.
+	// WSL2 mirrored networking can route packets through any of several virtual
+	// adapters, so joining on all of them ensures we both receive M-SEARCH
+	// requests and that the kernel delivers our outgoing announcements correctly.
+	let multicast_ip: Ipv4Addr = "239.255.255.250".parse()?;
+	let joined = join_all_interfaces(&socket, &multicast_ip);
+	if joined == 0 {
+		// Fallback if interface enumeration failed
+		socket.join_multicast_v4(&multicast_ip, &local_ip)?;
+	}
 
 	// SAFETY: into_raw_fd/socket consumes the socket2::Socket, transferring
 	// fd ownership. from_raw_fd/socket immediately takes that ownership.
@@ -85,6 +96,22 @@ fn create_socket(local_ip: Ipv4Addr) -> anyhow::Result<UdpSocket> {
 	};
 
 	Ok(UdpSocket::from_std(std_socket)?)
+}
+
+fn join_all_interfaces(socket: &socket2::Socket, multicast_addr: &Ipv4Addr) -> usize {
+	let Ok(ifaces) = if_addrs::get_if_addrs() else { return 0 };
+	let mut joined = 0;
+	for iface in ifaces {
+		if iface.is_loopback() {
+			continue;
+		}
+		if let if_addrs::IfAddr::V4(v4) = iface.addr {
+			if socket.join_multicast_v4(multicast_addr, &v4.ip).is_ok() {
+				joined += 1;
+			}
+		}
+	}
+	joined
 }
 
 /// (NT, USN) pairs for all five notification types this device advertises.
