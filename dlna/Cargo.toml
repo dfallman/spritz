@@ -1,14 +1,13 @@
 [package]
-name = "api"
+name = "dlna"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
 axum = "0.8.8"
-dlna = { version = "0.1.0", path = "../dlna" }
-uuid = { version = "1", features = ["v4"] }
+httpdate = "1.0"
+socket2 = "0.5"
 spritz-core = { version = "0.1.0", path = "../core" }
-local-ip-address = "0.6.11"
 tokio = { version = "1.51.1", features = ["full"] }
-tower-http = { version = "0.6.8", features = ["fs"] }
+uuid = { version = "1", features = ["v4"] }

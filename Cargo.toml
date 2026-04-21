@@ -3,7 +3,8 @@ resolver = "3"
 members = [
     "core",
     "cli",
-    "api"
+    "api",
+    "dlna"
 ]
 
 [workspace.package]

@@ -3,13 +3,13 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "spritz")]
-#[command(about = "VLC Apple TV Video Publisher")]
+#[command(about = "Instant DLNA media server — run in any folder to share it on the network")]
 struct Cli {
-	/// The folder containing the videos to publish
-	#[arg(short, long)]
-	folder: PathBuf,
+	/// Folders to serve (defaults to current directory)
+	#[arg(value_name = "FOLDER")]
+	folders: Vec<PathBuf>,
 
-	/// The port to bind the server to
+	/// Port to listen on
 	#[arg(short, long, default_value_t = 8080)]
 	port: u16,
 }
@@ -18,15 +18,20 @@ struct Cli {
 async fn main() -> anyhow::Result<()> {
 	let cli = Cli::parse();
 
-	if !cli.folder.exists() || !cli.folder.is_dir() {
-		anyhow::bail!("The specified folder does not exist or is not a directory.");
+	let folders = if cli.folders.is_empty() {
+		vec![std::env::current_dir()?]
+	} else {
+		cli.folders
+	};
+
+	for folder in &folders {
+		if !folder.is_dir() {
+			anyhow::bail!("{} is not a directory", folder.display());
+		}
 	}
 
-	println!("Starting spritz server targeting folder: {:?}", cli.folder);
-
-	// Start the api server
-	if let Err(e) = api::start_server(cli.port, cli.folder).await {
-		eprintln!("Server error: {}", e);
+	if let Err(e) = api::start_server(cli.port, folders).await {
+		eprintln!("Server error: {e}");
 		std::process::exit(1);
 	}
 

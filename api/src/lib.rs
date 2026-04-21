@@ -5,96 +5,85 @@ use axum::{
 	response::IntoResponse,
 	routing::get,
 };
-use spritz_core::find_videos;
+use spritz_core::{find_videos, video_url_path};
 use local_ip_address::local_ip;
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
-	video_dir: PathBuf,
+	video_dirs: Vec<PathBuf>,
 	videos: Vec<PathBuf>,
 }
 
-pub async fn start_server(port: u16, video_dir: PathBuf) -> anyhow::Result<()> {
-	// Index videos ONCE sequentially upon startup
-	let videos = match find_videos(&video_dir) {
-		Ok(v) => {
-			println!("Indexed {} video(s):", v.len());
-			for video in &v {
-				println!("- {}", video.display());
-			}
-			v
+pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result<()> {
+	let mut videos = Vec::new();
+	for dir in &video_dirs {
+		match find_videos(dir) {
+			Ok(mut found) => videos.append(&mut found),
+			Err(e) => eprintln!("Warning: could not scan {}: {e}", dir.display()),
 		}
-		Err(e) => {
-			println!("Scanning warning: could not read video directory: {}", e);
-			Vec::new()
-		}
-	};
+	}
 
-	let state = AppState {
-		video_dir: video_dir.clone(),
-		videos,
-	};
-
-	let app = Router::new()
-		.route("/spritz", get(generate_m3u))
-		.nest_service("/v", ServeDir::new(&video_dir))
-		.with_state(Arc::new(state));
-
-	let addr = std::net::SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port));
-	let listener = tokio::net::TcpListener::bind(&addr).await?;
+	println!("Indexed {} video(s):", videos.len());
+	for video in &videos {
+		println!("  {}", video.display());
+	}
 
 	let ip = local_ip().unwrap_or_else(|_| "127.0.0.1".parse().unwrap());
-	let port_str = if port == 80 {
-		String::new()
-	} else {
-		format!(":{}", port)
-	};
-	println!("Server running! Plug this link into VLC or other media player supporting M3U:");
-	println!("http://{}{}/spritz", ip, port_str);
+
+	let dlna_config = Arc::new(dlna::DlnaConfig {
+		device_uuid: Uuid::new_v4().to_string(),
+		friendly_name: "Spritz Media Server".to_string(),
+		http_port: port,
+		local_ip: ip,
+		video_dirs: video_dirs.clone(),
+		videos: videos.clone(),
+	});
+
+	tokio::spawn(dlna::run_ssdp(Arc::clone(&dlna_config)));
+
+	let state = Arc::new(AppState { video_dirs, videos });
+
+	// Mount each folder at /v/{index}/ so URLs stay unambiguous across dirs
+	let app = state.video_dirs.iter().enumerate().fold(
+		Router::new().route("/spritz", get(generate_m3u)),
+		|router, (i, dir)| router.nest_service(&format!("/v/{i}"), ServeDir::new(dir)),
+	)
+	.merge(dlna::router(Arc::clone(&dlna_config)))
+	.with_state(Arc::clone(&state));
+
+	let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port));
+	let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+	let port_str = if port == 80 { String::new() } else { format!(":{port}") };
+	println!("Serving on http://{ip}{port_str}/spritz");
+	println!("DLNA: discoverable as \"Spritz Media Server\" on the local network");
 
 	axum::serve(listener, app).await?;
 	Ok(())
 }
 
 async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-	let mut m3u = String::from("#EXTM3U\n");
+	if state.videos.is_empty() {
+		return (StatusCode::INTERNAL_SERVER_ERROR, "No videos indexed.").into_response();
+	}
 
 	let hostname = headers
 		.get(header::HOST)
 		.and_then(|h| h.to_str().ok())
 		.unwrap_or("127.0.0.1");
 
-	if state.videos.is_empty() {
-		return (
-			StatusCode::INTERNAL_SERVER_ERROR,
-			"No videos were indexed at deployment.",
-		)
-			.into_response();
-	}
+	let mut m3u = String::from("#EXTM3U\n");
 
 	for video in &state.videos {
-		if let Ok(relative) = video.strip_prefix(&state.video_dir) {
-			#[cfg(windows)]
-			let path_str = relative.to_string_lossy().replace('\\', "/");
-			#[cfg(not(windows))]
-			let path_str = relative.to_string_lossy().to_string();
-
-			let url_encoded_path = path_str
-				.split('/')
-				.map(|segment| urlencoding::encode(segment).into_owned())
-				.collect::<Vec<_>>()
-				.join("/");
-
+		if let Some((i, path)) = video_url_path(video, &state.video_dirs) {
 			let filename = video.file_name().unwrap_or_default().to_string_lossy();
-
-			m3u.push_str(&format!("#EXTINF:-1,{}\n", filename));
-			m3u.push_str(&format!(
-				"http://{}/v/{}\n",
-				hostname, url_encoded_path
-			));
+			write!(m3u, "#EXTINF:-1,{filename}\n").unwrap();
+			write!(m3u, "http://{hostname}/v/{i}/{path}\n").unwrap();
 		}
 	}
 
