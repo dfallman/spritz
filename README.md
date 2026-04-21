@@ -1,6 +1,6 @@
 # Spritz
 
-`spritz` is a nano DLNA media server. Run it in a folder and that folder becomes browsable from TVs, phones, and other media players on your local network.
+`spritz` is a nano DLNA media server. Run it in a folder and that folder becomes instantly available from TVs, phones, and other media players on your local network.
 
 ```
 cd /mnt/nas/movies
