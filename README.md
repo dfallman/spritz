@@ -8,7 +8,7 @@ spritz
 ```
 ...or
 ```
-spritz /mtt/nas/movies 
+spritz /mnt/nas/movies 
 ```
 
 Expected output:
