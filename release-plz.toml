@@ -1,0 +1,58 @@
+[workspace]
+# Binary app — none of the crates go to crates.io.
+publish = false
+# Skip cargo-semver-checks; relevant only for public library APIs.
+semver_check = false
+# Annotated tag per release (release-plz creates annotated tags by default).
+git_tag_name = "v{{ version }}"
+# Enable a single GitHub Release for the whole workspace.
+git_release_enable = true
+# Use the workspace-level CHANGELOG as the release body.
+git_release_body = """{{ changelog }}"""
+# Title of the release PR.
+pr_name = "chore(release): update version to {{ version }}"
+# Commit message release-plz writes once the PR is merged / when it pushes
+# the version bump directly.
+pr_labels = ["release"]
+changelog_update = true
+changelog_path = "./CHANGELOG.md"
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+
+body = """
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\\n") | first | trim | upper_first }}{% if commit.breaking %} **[BREAKING]**{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+
+# Map Conventional Commit types to changelog sections.
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^style", skip = true },
+    { message = "^test", skip = true },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^build", skip = true },
+    { message = "^revert", group = "Reverted" },
+]
+
+# Drop merge commits and anything that doesn't match a parser.
+filter_unconventional = true
+protect_breaking_commits = true
+sort_commits = "newest"
