@@ -28,14 +28,14 @@ SSDP: listening on 239.255.255.250:1900
 
 DLNA clients — smart TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and the like — should see it appear in their network sources within a few seconds.
 
-<!-- Drop a screenshot or terminal GIF here. -->
+<img width="1684" height="1148" alt="CleanShot 2026-04-22 at 12 53 55@2x" src="https://github.com/user-attachments/assets/86f45ac6-a8aa-400a-9fd2-7752c7dc14fb" />
 
 ## Features
 
-- Runs from a single command — zero config, zero state
+- Runs from a single command, `spritz` — zero config, zero state
 - Announces itself via SSDP/UPnP, so clients find it without typing an IP
 - Serves one or more folders (recursively — subdirectories are indexed automatically) from a single instance
-- Presents three browse views at the root: **Videos**, **Music**, and **By folder** (the on-disk structure)
+- Presents three browse views at the root: `Videos`, `Music`, and `By folder` (the on-disk structure)
 - Supports video and audio formats (MP4/MKV/AVI/MOV/… and MP3/FLAC/OGG/…)
 - Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse
 - Exposes an M3U playlist at `/spritz` for VLC, Infuse, and similar players
@@ -47,8 +47,7 @@ Most DLNA servers (MiniDLNA/ReadyMedia, Rygel, Serviio, Plex) are persistent dae
 
 While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers such as Plex, Jellyfin, Emby, and others.
 
-**Note**: Spritz parses the file tree on start, but it doesn't monitor it for changes. Hence, if you add a file to a share, it won't show until you restart Spritz.
-
+**Note**: Spritz parses the file tree when it starts up, but it doesn't monitor it for changes. Hence, if you add a file to a share, it won't show until you restart Spritz.
 
 
 ## Install
@@ -65,8 +64,9 @@ Each archive ships with a `.sha256` checksum.
 
 ### From source
 
-Requires a Rust toolchain — which is easily installed via [rustup](https://rustup.rs/). Then:
+Spritz is built entirely in Rust. To build it from source, install the Rust toolchain (called `cargo`) using [rustup](https://rustup.rs/). It's better to install this way than through your package manager (such as `apt`) as you might then not get the latest version.
 
+Once installed:
 ```bash
 git clone https://github.com/dfallman/spritz
 cd spritz
@@ -104,13 +104,16 @@ spritz --port 9000 /media/videos
 
 ## Connecting a client
 
-**Smart TVs, game consoles, or media players (DLNA).** Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
+- **Smart TVs, game consoles, or media players (DLNA).** Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
 
-**VLC.** `Media → Open Network Stream → http://192.168.x.x:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug'n'Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
+- **VLC.** `Media → Open Network Stream → http:/<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug'n'Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
 
-**Infuse (Apple TV / iOS / iPadOS).** `Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
+- **Infuse (Apple TV / iOS / iPadOS).** `Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
 
-**Any M3U-capable player.** Point it at `http://<your-ip>:8080/spritz`.
+- **Any M3U-capable player.** Point it at `http://<your-spritz-server-ip>:8080/spritz`.
+
+**Note**: to find your server's IP, use `ipconfig` in the Windows Command Prompt, check `System Settings → Network` (or use `ipconfig getifaddr en0` in a terminal) on macOS, and run `ip addr` or `hostname -I` on Linux.
+
 
 ## Supported formats
 
