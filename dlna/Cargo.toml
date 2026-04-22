@@ -13,7 +13,7 @@ axum = "0.8.8"
 httpdate = "1.0"
 if-addrs = "0.15"
 socket2 = "0.6"
-spritz-core = { version = "0.1.3", path = "../core" }
+spritz-core = { version = "0.1.4", path = "../core" }
 tokio = { version = "1.51.1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6.8", features = ["timeout"] }
