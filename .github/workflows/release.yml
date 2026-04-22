@@ -69,8 +69,14 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
           echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
+      # Embed the dependency tree (crate names + versions) into the binary
+      # so future `cargo audit bin spritz` can scan the shipped artifact
+      # for advisories without needing the source.
+      - name: Install cargo-auditable
+        run: cargo install cargo-auditable --locked
+
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --package cli
+        run: cargo auditable build --release --target ${{ matrix.target }} --package cli
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
