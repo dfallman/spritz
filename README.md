@@ -3,7 +3,7 @@
 [![ci](https://github.com/dfallman/spritz/actions/workflows/ci.yml/badge.svg)](https://github.com/dfallman/spritz/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`spritz` is a nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
+`spritz` is a terminal-based, nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
 
 ```
 cd /mnt/nas/movies
