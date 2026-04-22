@@ -1,20 +1,23 @@
 # Spritz
 
+[![ci](https://github.com/dfallman/spritz/actions/workflows/ci.yml/badge.svg)](https://github.com/dfallman/spritz/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 `spritz` is a nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
 
 ```
 cd /mnt/nas/movies
 spritz
 ```
-...or
+or, alternatively:
 ```
-spritz /mnt/nas/movies 
+spritz /mnt/nas/movies /mnt/nas/music 
 ```
 
 Expected output:
 ```
-Indexed 47 media file(s)
-Serving on http://192.168.1.100:8080/spritz
+Indexed XX media file(s)
+Serving on http://192.168.XXX.XXX:8080/spritz
 DLNA: discoverable as "Spritz Media Server" on the local network
 SSDP: listening on 239.255.255.250:1900
 ```
@@ -169,4 +172,4 @@ Restart VLC *after* Spritz is running, not before — VLC only scans at startup 
 
 
 ## License
-MIT
+MIT — see [LICENSE](LICENSE).
