@@ -57,7 +57,7 @@ Each archive ships with a `.sha256` checksum.
 
 ### From source
 
-Spritz is built entirely in Rust. To build it from source, install the Rust toolchain (called `cargo`) using [rustup](https://rustup.rs/). It's better to install this way than through your package manager (such as `apt`) as you might then not get the latest version.
+To compile Spritz, you’ll need the Rust toolchain. Use [rustup](https://rustup.rs/) for the installation; it ensures you have the latest version of cargo, whereas system-level managers (like apt) frequently distribute stale binaries that may lead to compatibility issues.
 
 Once installed:
 ```bash
