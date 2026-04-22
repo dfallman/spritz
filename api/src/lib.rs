@@ -1,12 +1,12 @@
 use axum::{
 	Router,
 	extract::State,
-	http::{HeaderValue, StatusCode, header, HeaderMap},
+	http::{HeaderMap, HeaderValue, StatusCode, header},
 	response::IntoResponse,
 	routing::get,
 };
-use spritz_core::{find_media, media_url_path};
 use local_ip_address::local_ip;
+use spritz_core::{find_media, media_url_path};
 use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -53,7 +53,10 @@ pub async fn start_server(port: u16, media_dirs: Vec<PathBuf>) -> anyhow::Result
 
 	tokio::spawn(dlna::run_ssdp(Arc::clone(&dlna_config)));
 
-	let state = Arc::new(AppState { media_dirs, media_files });
+	let state = Arc::new(AppState {
+		media_dirs,
+		media_files,
+	});
 
 	// Inject DLNA headers on every /m/{i}/ response. Strict clients (Infuse)
 	// refuse to play a stream missing these, even if the raw HTTP is fine.
@@ -70,24 +73,32 @@ pub async fn start_server(port: u16, media_dirs: Vec<PathBuf>) -> anyhow::Result
 		));
 
 	// Mount each folder at /m/{index}/ so URLs stay unambiguous across dirs
-	let app = state.media_dirs.iter().enumerate().fold(
-		Router::new().route("/spritz", get(generate_m3u)),
-		|router, (i, dir)| {
-			router.nest_service(
-				&format!("/m/{i}"),
-				tower::ServiceBuilder::new()
-					.layer(dlna_layer.clone())
-					.service(ServeDir::new(dir)),
-			)
-		},
-	)
-	.merge(dlna::router(Arc::clone(&dlna_config)))
-	.with_state(Arc::clone(&state));
+	let app = state
+		.media_dirs
+		.iter()
+		.enumerate()
+		.fold(
+			Router::new().route("/spritz", get(generate_m3u)),
+			|router, (i, dir)| {
+				router.nest_service(
+					&format!("/m/{i}"),
+					tower::ServiceBuilder::new()
+						.layer(dlna_layer.clone())
+						.service(ServeDir::new(dir)),
+				)
+			},
+		)
+		.merge(dlna::router(Arc::clone(&dlna_config)))
+		.with_state(Arc::clone(&state));
 
 	let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::UNSPECIFIED, port));
 	let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-	let port_str = if port == 80 { String::new() } else { format!(":{port}") };
+	let port_str = if port == 80 {
+		String::new()
+	} else {
+		format!(":{port}")
+	};
 	println!("Serving on http://{ip}{port_str}/spritz");
 	println!("DLNA: discoverable as \"Spritz Media Server\" on the local network");
 
@@ -110,8 +121,8 @@ async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) ->
 	for file in &state.media_files {
 		if let Some((i, path)) = media_url_path(file, &state.media_dirs) {
 			let filename = file.file_name().unwrap_or_default().to_string_lossy();
-			write!(m3u, "#EXTINF:-1,{filename}\n").unwrap();
-			write!(m3u, "http://{hostname}/m/{i}/{path}\n").unwrap();
+			writeln!(m3u, "#EXTINF:-1,{filename}").unwrap();
+			writeln!(m3u, "http://{hostname}/m/{i}/{path}").unwrap();
 		}
 	}
 

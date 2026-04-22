@@ -2,7 +2,11 @@ use axum::{body::Body, response::Response};
 
 pub fn parse_action(header_value: &str) -> String {
 	let s = header_value.trim().trim_matches('"');
-	s.rsplit('#').next().unwrap_or("").trim_matches('"').to_string()
+	s.rsplit('#')
+		.next()
+		.unwrap_or("")
+		.trim_matches('"')
+		.to_string()
 }
 
 /// Extract the text content of the first <LocalName> or <ns:LocalName> element.
