@@ -1,0 +1,66 @@
+name: release-plz
+
+on:
+  push:
+    branches:
+      - main
+
+# Two-job setup per release-plz guidance:
+#   - release-plz-pr: opens / updates the release PR whenever new
+#     conventional commits land on main.
+#   - release-plz-release: runs after that PR is merged (or after any
+#     other push to main) and creates the annotated git tag + GitHub Release.
+# Both jobs are idempotent and no-op when there's nothing to do.
+
+jobs:
+  release-plz-release:
+    name: Release-plz release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'dfallman' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # release-plz needs the full history to classify commits by tag.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'dfallman' }}
+    permissions:
+      contents: write
+      pull-requests: write
+    # Prevent concurrent runs from opening duplicate release PRs.
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        uses: MarcoIeni/release-plz-action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
