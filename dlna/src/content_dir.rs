@@ -52,15 +52,12 @@ pub async fn handle_connectionmanager(
 	match action.as_str() {
 		"GetProtocolInfo" => {
 			let flags = DLNA_CONTENT_FEATURES;
-			let inner = format!(
-				"<Source>http-get:*:video/mp4:{flags},\
-					http-get:*:video/x-matroska:{flags},\
-					http-get:*:video/x-msvideo:{flags},\
-					http-get:*:video/quicktime:{flags},\
-					http-get:*:video/webm:{flags},\
-					http-get:*:video/x-flv:{flags}</Source>\
-					<Sink></Sink>"
-			);
+			let source = spritz_core::ALL_MIMES
+				.iter()
+				.map(|m| format!("http-get:*:{m}:{flags}"))
+				.collect::<Vec<_>>()
+				.join(",");
+			let inner = format!("<Source>{source}</Source><Sink></Sink>");
 			soap::ok(soap::response("GetProtocolInfo", CM_SERVICE, &inner))
 		}
 		"GetCurrentConnectionIDs" => soap::ok(soap::response(
@@ -82,8 +79,15 @@ pub async fn handle_connectionmanager(
 	}
 }
 
+// Container IDs. Infuse (and tvOS DLNA clients in general) expect the root
+// to contain child containers, not items. Plex/minidlna/Jellyfin all use this
+// shape, so it's what clients are tuned for.
+const ROOT_ID: &str = "0";
+const VIDEO_ID: &str = "V";
+const AUDIO_ID: &str = "A";
+
 fn browse(body: &str, config: &DlnaConfig) -> Response {
-	let object_id = soap::extract_tag_value(body, "ObjectID").unwrap_or_else(|| "0".to_string());
+	let object_id = soap::extract_tag_value(body, "ObjectID").unwrap_or_else(|| ROOT_ID.to_string());
 	let browse_flag = soap::extract_tag_value(body, "BrowseFlag")
 		.unwrap_or_else(|| "BrowseDirectChildren".to_string());
 	let start: usize = soap::extract_tag_value(body, "StartingIndex")
@@ -93,33 +97,68 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 		.and_then(|s| s.parse().ok())
 		.unwrap_or(0);
 
-	let total = config.videos.len();
+	// Index membership lists per category. Cheap on small libraries; the
+	// whole media list is already in memory.
+	let video_idx: Vec<usize> = config
+		.media_files
+		.iter()
+		.enumerate()
+		.filter(|(_, p)| !is_audio(p))
+		.map(|(i, _)| i)
+		.collect();
+	let audio_idx: Vec<usize> = config
+		.media_files
+		.iter()
+		.enumerate()
+		.filter(|(_, p)| is_audio(p))
+		.map(|(i, _)| i)
+		.collect();
 
 	let (didl, returned, total_matches) = match (object_id.as_str(), browse_flag.as_str()) {
-		("0", "BrowseMetadata") => {
+		(ROOT_ID, "BrowseMetadata") => {
+			let child_count = [&video_idx, &audio_idx].iter().filter(|v| !v.is_empty()).count();
 			let xml = format!(
-				r#"<container id="0" parentID="-1" restricted="1" childCount="{total}">
-    <dc:title>Videos</dc:title>
+				r#"<container id="0" parentID="-1" restricted="1" childCount="{child_count}">
+    <dc:title>Spritz</dc:title>
     <upnp:class>object.container</upnp:class>
   </container>"#
 			);
 			(didl_wrap(&[xml]), 1usize, 1usize)
 		}
-		("0", _) => {
+		(ROOT_ID, _) => {
+			let mut containers = Vec::new();
+			if !video_idx.is_empty() {
+				containers.push(category_container_xml(VIDEO_ID, "Videos", video_idx.len()));
+			}
+			if !audio_idx.is_empty() {
+				containers.push(category_container_xml(AUDIO_ID, "Music", audio_idx.len()));
+			}
+			let total = containers.len();
 			let slice_start = start.min(total);
 			let slice_end = if count == 0 { total } else { (start + count).min(total) };
-			let items: Vec<String> = config.videos[slice_start..slice_end]
-				.iter()
-				.enumerate()
-				.filter_map(|(i, path)| item_xml(slice_start + i, path, config))
-				.collect();
-			let returned = items.len();
-			(didl_wrap(&items), returned, total)
+			let slice = &containers[slice_start..slice_end];
+			(didl_wrap(slice), slice.len(), total)
 		}
-		(id, _) if id.starts_with("v:") => {
+		(VIDEO_ID, "BrowseMetadata") => {
+			let xml = category_container_xml(VIDEO_ID, "Videos", video_idx.len());
+			(didl_wrap(&[xml]), 1, 1)
+		}
+		(AUDIO_ID, "BrowseMetadata") => {
+			let xml = category_container_xml(AUDIO_ID, "Music", audio_idx.len());
+			(didl_wrap(&[xml]), 1, 1)
+		}
+		(VIDEO_ID, _) => category_children(&video_idx, VIDEO_ID, start, count, config),
+		(AUDIO_ID, _) => category_children(&audio_idx, AUDIO_ID, start, count, config),
+		(id, _) if id.starts_with("m:") => {
 			let idx: usize = id[2..].parse().unwrap_or(usize::MAX);
-			match config.videos.get(idx).and_then(|p| item_xml(idx, p, config)) {
-				Some(item) => (didl_wrap(&[item]), 1, 1),
+			match config.media_files.get(idx) {
+				Some(p) => {
+					let parent = if is_audio(p) { AUDIO_ID } else { VIDEO_ID };
+					match item_xml(idx, p, parent, config) {
+						Some(item) => (didl_wrap(&[item]), 1, 1),
+						None => return soap::err(soap::fault(701, "No Such Object")),
+					}
+				}
 				None => return soap::err(soap::fault(701, "No Such Object")),
 			}
 		}
@@ -136,6 +175,41 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 	soap::ok(soap::response("Browse", CD_SERVICE, &inner))
 }
 
+fn category_container_xml(id: &str, title: &str, child_count: usize) -> String {
+	format!(
+		r#"<container id="{id}" parentID="0" restricted="1" childCount="{child_count}">
+    <dc:title>{title}</dc:title>
+    <upnp:class>object.container</upnp:class>
+  </container>"#
+	)
+}
+
+fn category_children(
+	indices: &[usize],
+	parent: &str,
+	start: usize,
+	count: usize,
+	config: &DlnaConfig,
+) -> (String, usize, usize) {
+	let total = indices.len();
+	let slice_start = start.min(total);
+	let slice_end = if count == 0 { total } else { (start + count).min(total) };
+	let items: Vec<String> = indices[slice_start..slice_end]
+		.iter()
+		.filter_map(|&i| config.media_files.get(i).and_then(|p| item_xml(i, p, parent, config)))
+		.collect();
+	let returned = items.len();
+	(didl_wrap(&items), returned, total)
+}
+
+fn is_audio(path: &Path) -> bool {
+	path.extension()
+		.and_then(|e| e.to_str())
+		.and_then(spritz_core::mime_for_ext)
+		.map(|m| m.starts_with("audio/"))
+		.unwrap_or(false)
+}
+
 fn didl_wrap(entries: &[String]) -> String {
 	format!(
 		r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">
@@ -145,31 +219,28 @@ fn didl_wrap(entries: &[String]) -> String {
 	)
 }
 
-fn item_xml(index: usize, path: &Path, config: &DlnaConfig) -> Option<String> {
-	let (dir_idx, url_path) = spritz_core::video_url_path(path, &config.video_dirs)?;
+fn item_xml(index: usize, path: &Path, parent_id: &str, config: &DlnaConfig) -> Option<String> {
+	let (dir_idx, url_path) = spritz_core::media_url_path(path, &config.media_dirs)?;
 	let url = format!(
-		"http://{}:{}/v/{dir_idx}/{url_path}",
+		"http://{}:{}/m/{dir_idx}/{url_path}",
 		config.local_ip, config.http_port
 	);
 	let title = path.file_name()?.to_string_lossy();
-	let ext = path
-		.extension()
-		.and_then(|e| e.to_str())
-		.unwrap_or("")
-		.to_lowercase();
-	let mime = mime_for_ext(&ext);
+	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+	let mime = spritz_core::mime_for_ext(ext).unwrap_or("application/octet-stream");
+	let class = upnp_class_for_mime(mime);
 	let flags = DLNA_CONTENT_FEATURES;
 
 	// Emit size= only when we know it — Infuse treats size="0" as "empty file".
-	let size_attr = match config.video_sizes.get(index).copied().unwrap_or(0) {
+	let size_attr = match config.media_sizes.get(index).copied().unwrap_or(0) {
 		0 => String::new(),
 		n => format!(r#" size="{n}""#),
 	};
 
 	Some(format!(
-		r#"<item id="v:{index}" parentID="0" restricted="1">
+		r#"<item id="m:{index}" parentID="{parent_id}" restricted="1">
     <dc:title>{}</dc:title>
-    <upnp:class>object.item.videoItem</upnp:class>
+    <upnp:class>{class}</upnp:class>
     <dc:date>2000-01-01</dc:date>
     <res protocolInfo="http-get:*:{mime}:{flags}"{size_attr}>{}</res>
   </item>"#,
@@ -178,14 +249,10 @@ fn item_xml(index: usize, path: &Path, config: &DlnaConfig) -> Option<String> {
 	))
 }
 
-fn mime_for_ext(ext: &str) -> &'static str {
-	match ext {
-		"mp4" | "m4v" => "video/mp4",
-		"mkv" => "video/x-matroska",
-		"avi" => "video/x-msvideo",
-		"mov" => "video/quicktime",
-		"webm" => "video/webm",
-		"flv" => "video/x-flv",
-		_ => "application/octet-stream",
+fn upnp_class_for_mime(mime: &str) -> &'static str {
+	if mime.starts_with("audio/") {
+		"object.item.audioItem.musicTrack"
+	} else {
+		"object.item.videoItem"
 	}
 }

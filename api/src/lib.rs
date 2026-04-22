@@ -5,7 +5,7 @@ use axum::{
 	response::IntoResponse,
 	routing::get,
 };
-use spritz_core::{find_videos, video_url_path};
+use spritz_core::{find_media, media_url_path};
 use local_ip_address::local_ip;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -16,25 +16,25 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
-	video_dirs: Vec<PathBuf>,
-	videos: Vec<PathBuf>,
+	media_dirs: Vec<PathBuf>,
+	media_files: Vec<PathBuf>,
 }
 
-pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result<()> {
-	let mut videos = Vec::new();
-	for dir in &video_dirs {
-		match find_videos(dir) {
-			Ok(mut found) => videos.append(&mut found),
+pub async fn start_server(port: u16, media_dirs: Vec<PathBuf>) -> anyhow::Result<()> {
+	let mut media_files = Vec::new();
+	for dir in &media_dirs {
+		match find_media(dir) {
+			Ok(mut found) => media_files.append(&mut found),
 			Err(e) => eprintln!("Warning: could not scan {}: {e}", dir.display()),
 		}
 	}
 
-	println!("Indexed {} video(s):", videos.len());
-	for video in &videos {
-		println!("  {}", video.display());
+	println!("Indexed {} media file(s):", media_files.len());
+	for file in &media_files {
+		println!("  {}", file.display());
 	}
 
-	let video_sizes: Vec<u64> = videos
+	let media_sizes: Vec<u64> = media_files
 		.iter()
 		.map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
 		.collect();
@@ -46,16 +46,16 @@ pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result
 		friendly_name: "Spritz Media Server".to_string(),
 		http_port: port,
 		local_ip: ip,
-		video_dirs: video_dirs.clone(),
-		videos: videos.clone(),
-		video_sizes,
+		media_dirs: media_dirs.clone(),
+		media_files: media_files.clone(),
+		media_sizes,
 	});
 
 	tokio::spawn(dlna::run_ssdp(Arc::clone(&dlna_config)));
 
-	let state = Arc::new(AppState { video_dirs, videos });
+	let state = Arc::new(AppState { media_dirs, media_files });
 
-	// Inject DLNA headers on every /v/{i}/ response. Strict clients (Infuse)
+	// Inject DLNA headers on every /m/{i}/ response. Strict clients (Infuse)
 	// refuse to play a stream missing these, even if the raw HTTP is fine.
 	let transfer_mode = HeaderValue::from_static("Streaming");
 	let content_features = HeaderValue::from_static(dlna::DLNA_CONTENT_FEATURES);
@@ -69,12 +69,12 @@ pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result
 			content_features,
 		));
 
-	// Mount each folder at /v/{index}/ so URLs stay unambiguous across dirs
-	let app = state.video_dirs.iter().enumerate().fold(
+	// Mount each folder at /m/{index}/ so URLs stay unambiguous across dirs
+	let app = state.media_dirs.iter().enumerate().fold(
 		Router::new().route("/spritz", get(generate_m3u)),
 		|router, (i, dir)| {
 			router.nest_service(
-				&format!("/v/{i}"),
+				&format!("/m/{i}"),
 				tower::ServiceBuilder::new()
 					.layer(dlna_layer.clone())
 					.service(ServeDir::new(dir)),
@@ -96,8 +96,8 @@ pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result
 }
 
 async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-	if state.videos.is_empty() {
-		return (StatusCode::INTERNAL_SERVER_ERROR, "No videos indexed.").into_response();
+	if state.media_files.is_empty() {
+		return (StatusCode::INTERNAL_SERVER_ERROR, "No media indexed.").into_response();
 	}
 
 	let hostname = headers
@@ -107,11 +107,11 @@ async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) ->
 
 	let mut m3u = String::from("#EXTM3U\n");
 
-	for video in &state.videos {
-		if let Some((i, path)) = video_url_path(video, &state.video_dirs) {
-			let filename = video.file_name().unwrap_or_default().to_string_lossy();
+	for file in &state.media_files {
+		if let Some((i, path)) = media_url_path(file, &state.media_dirs) {
+			let filename = file.file_name().unwrap_or_default().to_string_lossy();
 			write!(m3u, "#EXTINF:-1,{filename}\n").unwrap();
-			write!(m3u, "http://{hostname}/v/{i}/{path}\n").unwrap();
+			write!(m3u, "http://{hostname}/m/{i}/{path}\n").unwrap();
 		}
 	}
 

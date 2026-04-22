@@ -22,10 +22,10 @@ pub struct DlnaConfig {
 	pub friendly_name: String,
 	pub http_port: u16,
 	pub local_ip: IpAddr,
-	pub video_dirs: Vec<PathBuf>,
-	pub videos: Vec<PathBuf>,
-	/// File sizes parallel to `videos`; 0 when stat() failed.
-	pub video_sizes: Vec<u64>,
+	pub media_dirs: Vec<PathBuf>,
+	pub media_files: Vec<PathBuf>,
+	/// File sizes parallel to `media_files`; 0 when stat() failed.
+	pub media_sizes: Vec<u64>,
 }
 
 /// DLNA protocolInfo 4th field: byte-seek (OP=01), original format (CI=0),
