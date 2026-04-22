@@ -8,6 +8,7 @@
 
 <img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
 
+### Usage
 ```
 cd /mnt/nas/movies
 spritz
