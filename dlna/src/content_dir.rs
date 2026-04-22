@@ -89,6 +89,20 @@ pub async fn handle_connectionmanager(
 const ROOT_ID: &str = "0";
 const VIDEO_ID: &str = "V";
 const AUDIO_ID: &str = "A";
+const FOLDER_ID: &str = "F";
+
+/// Count of source-root FolderNodes that actually contain media (directly or
+/// transitively). Determines whether "By folder" shows up at the root, and
+/// is the childCount for the F container.
+fn active_root_folder_count(config: &DlnaConfig) -> usize {
+	let n = config.media_dirs.len();
+	config
+		.folder_nodes
+		.iter()
+		.take(n)
+		.filter(|node| !node.subfolder_indices.is_empty() || !node.media_indices.is_empty())
+		.count()
+}
 
 fn browse(body: &str, config: &DlnaConfig) -> Response {
 	let object_id =
@@ -119,12 +133,13 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 		.map(|(i, _)| i)
 		.collect();
 
+	let folder_root_count = active_root_folder_count(config);
+
 	let (didl, returned, total_matches) = match (object_id.as_str(), browse_flag.as_str()) {
 		(ROOT_ID, "BrowseMetadata") => {
-			let child_count = [&video_idx, &audio_idx]
-				.iter()
-				.filter(|v| !v.is_empty())
-				.count();
+			let child_count = (!video_idx.is_empty()) as usize
+				+ (!audio_idx.is_empty()) as usize
+				+ (folder_root_count > 0) as usize;
 			let xml = format!(
 				r#"<container id="0" parentID="-1" restricted="1" childCount="{child_count}">
     <dc:title>Spritz</dc:title>
@@ -140,6 +155,13 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 			}
 			if !audio_idx.is_empty() {
 				containers.push(category_container_xml(AUDIO_ID, "Music", audio_idx.len()));
+			}
+			if folder_root_count > 0 {
+				containers.push(category_container_xml(
+					FOLDER_ID,
+					"By folder",
+					folder_root_count,
+				));
 			}
 			let total = containers.len();
 			let slice_start = start.min(total);
@@ -159,8 +181,44 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 			let xml = category_container_xml(AUDIO_ID, "Music", audio_idx.len());
 			(didl_wrap(&[xml]), 1, 1)
 		}
+		(FOLDER_ID, "BrowseMetadata") => {
+			let xml = category_container_xml(FOLDER_ID, "By folder", folder_root_count);
+			(didl_wrap(&[xml]), 1, 1)
+		}
 		(VIDEO_ID, _) => category_children(&video_idx, VIDEO_ID, start, count, config),
 		(AUDIO_ID, _) => category_children(&audio_idx, AUDIO_ID, start, count, config),
+		(FOLDER_ID, _) => {
+			// Source roots, filtered to those with media in subtree.
+			let root_count = config.media_dirs.len();
+			let entries: Vec<String> = config
+				.folder_nodes
+				.iter()
+				.enumerate()
+				.take(root_count)
+				.filter(|(_, node)| {
+					!node.subfolder_indices.is_empty() || !node.media_indices.is_empty()
+				})
+				.map(|(i, node)| folder_container_xml(i, FOLDER_ID, node))
+				.collect();
+			paginate(entries, start, count)
+		}
+		(id, _) if id.starts_with("f:") => {
+			let idx: usize = match id[2..].parse() {
+				Ok(i) => i,
+				Err(_) => return soap::err(soap::fault(701, "No Such Object")),
+			};
+			let node = match config.folder_nodes.get(idx) {
+				Some(n) => n,
+				None => return soap::err(soap::fault(701, "No Such Object")),
+			};
+			let parent_id = folder_parent_id(config, idx);
+			if browse_flag == "BrowseMetadata" {
+				let xml = folder_container_xml_with_parent(idx, &parent_id, node);
+				(didl_wrap(&[xml]), 1, 1)
+			} else {
+				folder_children(idx, node, start, count, config)
+			}
+		}
 		(id, _) if id.starts_with("m:") => {
 			let idx: usize = id[2..].parse().unwrap_or(usize::MAX);
 			match config.media_files.get(idx) {
@@ -221,6 +279,82 @@ fn category_children(
 		.collect();
 	let returned = items.len();
 	(didl_wrap(&items), returned, total)
+}
+
+fn paginate(entries: Vec<String>, start: usize, count: usize) -> (String, usize, usize) {
+	let total = entries.len();
+	let slice_start = start.min(total);
+	let slice_end = if count == 0 {
+		total
+	} else {
+		(start + count).min(total)
+	};
+	let slice = &entries[slice_start..slice_end];
+	(didl_wrap(slice), slice.len(), total)
+}
+
+fn folder_child_count(node: &crate::FolderNode) -> usize {
+	node.subfolder_indices.len() + node.media_indices.len()
+}
+
+fn folder_container_xml(idx: usize, parent_id: &str, node: &crate::FolderNode) -> String {
+	folder_container_xml_with_parent(idx, parent_id, node)
+}
+
+fn folder_container_xml_with_parent(
+	idx: usize,
+	parent_id: &str,
+	node: &crate::FolderNode,
+) -> String {
+	let child_count = folder_child_count(node);
+	let title = xml_escape(&node.display_name);
+	format!(
+		r#"<container id="f:{idx}" parentID="{parent_id}" restricted="1" childCount="{child_count}">
+    <dc:title>{title}</dc:title>
+    <upnp:class>object.container.storageFolder</upnp:class>
+  </container>"#
+	)
+}
+
+/// Find the parent id for a given folder node. Source roots live under the
+/// "By folder" container (F); nested folders under their containing folder (f:N).
+fn folder_parent_id(config: &DlnaConfig, idx: usize) -> String {
+	let root_count = config.media_dirs.len();
+	if idx < root_count {
+		return FOLDER_ID.to_string();
+	}
+	for (parent_idx, node) in config.folder_nodes.iter().enumerate() {
+		if node.subfolder_indices.contains(&idx) {
+			return format!("f:{parent_idx}");
+		}
+	}
+	FOLDER_ID.to_string()
+}
+
+fn folder_children(
+	idx: usize,
+	node: &crate::FolderNode,
+	start: usize,
+	count: usize,
+	config: &DlnaConfig,
+) -> (String, usize, usize) {
+	let self_id = format!("f:{idx}");
+	let mut entries: Vec<String> = Vec::new();
+
+	for &sub_i in &node.subfolder_indices {
+		if let Some(sub) = config.folder_nodes.get(sub_i) {
+			entries.push(folder_container_xml(sub_i, &self_id, sub));
+		}
+	}
+	for &media_i in &node.media_indices {
+		if let Some(path) = config.media_files.get(media_i)
+			&& let Some(item) = item_xml(media_i, path, &self_id, config)
+		{
+			entries.push(item);
+		}
+	}
+
+	paginate(entries, start, count)
 }
 
 fn is_audio(path: &Path) -> bool {
