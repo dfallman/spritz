@@ -1,6 +1,6 @@
 # Spritz
 
-`spritz` is a nano DLNA media server. Run it in a folder and that folder becomes instantly available from TVs, phones, and other media players on your local network.
+`spritz` is a nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
 
 ```
 cd /mnt/nas/movies
@@ -13,7 +13,7 @@ spritz /mnt/nas/movies
 
 Expected output:
 ```
-Indexed 47 video(s)
+Indexed 47 media file(s)
 Serving on http://192.168.1.100:8080/spritz
 DLNA: discoverable as "Spritz Media Server" on the local network
 SSDP: listening on 239.255.255.250:1900
@@ -91,6 +91,8 @@ spritz --port 9000 /media/videos
 
 ## Supported formats
 
+**Video**
+
 | Extension      | MIME type            |
 |----------------|----------------------|
 | `.mp4`, `.m4v` | `video/mp4`          |
@@ -99,6 +101,19 @@ spritz --port 9000 /media/videos
 | `.mov`         | `video/quicktime`    |
 | `.webm`        | `video/webm`         |
 | `.flv`         | `video/x-flv`        |
+
+**Audio**
+
+| Extension        | MIME type            |
+|------------------|----------------------|
+| `.mp3`           | `audio/mpeg`         |
+| `.m4a`           | `audio/mp4`          |
+| `.aac`           | `audio/aac`          |
+| `.flac`          | `audio/flac`         |
+| `.ogg`, `.oga`, `.opus` | `audio/ogg`   |
+| `.wav`           | `audio/wav`          |
+| `.wma`           | `audio/x-ms-wma`     |
+| `.aiff`, `.aif`  | `audio/aiff`         |
 
 ---
 
@@ -126,10 +141,10 @@ New-NetFirewallRule -DisplayName "Spritz SSDP" `
 ### Under the hood
 
 Spritz implements DLNA/UPnP AV directly rather than wrapping an existing library:
-**Discovery (SSDP).** On startup, Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900`, listens for `M-SEARCH` requests, and responds unicast. Announcements repeat every 15 minutes. On exit it sends `ssdp:byebye`.
+**Discovery (SSDP).** On startup, Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900`, listens for `M-SEARCH` requests, and responds unicast. Announcements repeat every 3 minutes so flaky WiFi clients get more chances to catch them. On exit it sends `ssdp:byebye`.
 **Device description.** `GET /upnp/description.xml` returns a UPnP `MediaServer:1` device description listing the ContentDirectory and ConnectionManager services.
-**Browse (SOAP).** `POST /upnp/control/contentdirectory` handles `Browse`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. Browse returns DIDL-Lite XML with one `<item>` per video, XML-escaped inside a `<Result>` element as required by the ContentDirectory spec.
-**File serving.** Each source directory is mounted at `/v/{index}/`. Files stream over HTTP with range-request support, handled by `tower-http`'s `ServeDir`.
+**Browse (SOAP).** `POST /upnp/control/contentdirectory` handles `Browse`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. Browse returns DIDL-Lite XML with one `<item>` per media file, XML-escaped inside a `<Result>` element as required by the ContentDirectory spec.
+**File serving.** Each source directory is mounted at `/m/{index}/`. Files stream over HTTP with range-request support, handled by `tower-http`'s `ServeDir`.
 
 ### Device notes
 
