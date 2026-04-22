@@ -15,8 +15,3 @@ repository = "https://github.com/dfallman/spritz"
 authors = ["Daniel Fallman"]
 
 [workspace.dependencies]
-
-# The profile that 'dist' will build with
-[profile.dist]
-inherits = "release"
-lto = "thin"
