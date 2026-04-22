@@ -2,6 +2,10 @@
 name = "spritz-core"
 version.workspace = true
 edition = "2024"
+description = "Shared utilities for the Spritz DLNA media server (file discovery, MIME mapping, URL encoding)."
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 anyhow = "1.0.102"

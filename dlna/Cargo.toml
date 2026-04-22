@@ -2,6 +2,10 @@
 name = "dlna"
 version.workspace = true
 edition = "2024"
+description = "DLNA/UPnP AV server implementation (SSDP, ContentDirectory, ConnectionManager) for Spritz."
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 anyhow = "1.0.102"

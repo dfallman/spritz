@@ -2,6 +2,10 @@
 name = "api"
 version.workspace = true
 edition = "2024"
+description = "HTTP + M3U server for the Spritz DLNA media server."
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [dependencies]
 anyhow = "1.0.102"
