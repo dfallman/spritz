@@ -1,4 +1,4 @@
-use crate::{DlnaConfig, description::xml_escape, soap};
+use crate::{DLNA_CONTENT_FEATURES, DlnaConfig, description::xml_escape, soap};
 use axum::{http::HeaderMap, response::Response};
 use std::path::Path;
 use std::sync::Arc;
@@ -51,14 +51,17 @@ pub async fn handle_connectionmanager(
 
 	match action.as_str() {
 		"GetProtocolInfo" => {
-			let inner = "<Source>http-get:*:video/mp4:*,\
-				http-get:*:video/x-matroska:*,\
-				http-get:*:video/x-msvideo:*,\
-				http-get:*:video/quicktime:*,\
-				http-get:*:video/webm:*,\
-				http-get:*:video/x-flv:*</Source>\
-				<Sink></Sink>";
-			soap::ok(soap::response("GetProtocolInfo", CM_SERVICE, inner))
+			let flags = DLNA_CONTENT_FEATURES;
+			let inner = format!(
+				"<Source>http-get:*:video/mp4:{flags},\
+					http-get:*:video/x-matroska:{flags},\
+					http-get:*:video/x-msvideo:{flags},\
+					http-get:*:video/quicktime:{flags},\
+					http-get:*:video/webm:{flags},\
+					http-get:*:video/x-flv:{flags}</Source>\
+					<Sink></Sink>"
+			);
+			soap::ok(soap::response("GetProtocolInfo", CM_SERVICE, &inner))
 		}
 		"GetCurrentConnectionIDs" => soap::ok(soap::response(
 			"GetCurrentConnectionIDs",
@@ -155,13 +158,20 @@ fn item_xml(index: usize, path: &Path, config: &DlnaConfig) -> Option<String> {
 		.unwrap_or("")
 		.to_lowercase();
 	let mime = mime_for_ext(&ext);
+	let flags = DLNA_CONTENT_FEATURES;
+
+	// Emit size= only when we know it — Infuse treats size="0" as "empty file".
+	let size_attr = match config.video_sizes.get(index).copied().unwrap_or(0) {
+		0 => String::new(),
+		n => format!(r#" size="{n}""#),
+	};
 
 	Some(format!(
 		r#"<item id="v:{index}" parentID="0" restricted="1">
     <dc:title>{}</dc:title>
     <upnp:class>object.item.videoItem</upnp:class>
     <dc:date>2000-01-01</dc:date>
-    <res protocolInfo="http-get:*:{mime}:*">{}</res>
+    <res protocolInfo="http-get:*:{mime}:{flags}"{size_attr}>{}</res>
   </item>"#,
 		xml_escape(&title),
 		xml_escape(&url),

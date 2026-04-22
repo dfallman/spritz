@@ -1,7 +1,7 @@
 use axum::{
 	Router,
 	extract::State,
-	http::{StatusCode, header, HeaderMap},
+	http::{HeaderValue, StatusCode, header, HeaderMap},
 	response::IntoResponse,
 	routing::get,
 };
@@ -11,6 +11,7 @@ use std::fmt::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -33,6 +34,11 @@ pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result
 		println!("  {}", video.display());
 	}
 
+	let video_sizes: Vec<u64> = videos
+		.iter()
+		.map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+		.collect();
+
 	let ip = local_ip().unwrap_or_else(|_| "127.0.0.1".parse().unwrap());
 
 	let dlna_config = Arc::new(dlna::DlnaConfig {
@@ -42,16 +48,38 @@ pub async fn start_server(port: u16, video_dirs: Vec<PathBuf>) -> anyhow::Result
 		local_ip: ip,
 		video_dirs: video_dirs.clone(),
 		videos: videos.clone(),
+		video_sizes,
 	});
 
 	tokio::spawn(dlna::run_ssdp(Arc::clone(&dlna_config)));
 
 	let state = Arc::new(AppState { video_dirs, videos });
 
+	// Inject DLNA headers on every /v/{i}/ response. Strict clients (Infuse)
+	// refuse to play a stream missing these, even if the raw HTTP is fine.
+	let transfer_mode = HeaderValue::from_static("Streaming");
+	let content_features = HeaderValue::from_static(dlna::DLNA_CONTENT_FEATURES);
+	let dlna_layer = tower::ServiceBuilder::new()
+		.layer(SetResponseHeaderLayer::if_not_present(
+			header::HeaderName::from_static("transfermode.dlna.org"),
+			transfer_mode,
+		))
+		.layer(SetResponseHeaderLayer::if_not_present(
+			header::HeaderName::from_static("contentfeatures.dlna.org"),
+			content_features,
+		));
+
 	// Mount each folder at /v/{index}/ so URLs stay unambiguous across dirs
 	let app = state.video_dirs.iter().enumerate().fold(
 		Router::new().route("/spritz", get(generate_m3u)),
-		|router, (i, dir)| router.nest_service(&format!("/v/{i}"), ServeDir::new(dir)),
+		|router, (i, dir)| {
+			router.nest_service(
+				&format!("/v/{i}"),
+				tower::ServiceBuilder::new()
+					.layer(dlna_layer.clone())
+					.service(ServeDir::new(dir)),
+			)
+		},
 	)
 	.merge(dlna::router(Arc::clone(&dlna_config)))
 	.with_state(Arc::clone(&state));

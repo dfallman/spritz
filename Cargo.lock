@@ -68,6 +68,7 @@ dependencies = [
  "local-ip-address",
  "spritz-core",
  "tokio",
+ "tower",
  "tower-http",
  "uuid",
 ]

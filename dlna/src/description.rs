@@ -3,7 +3,7 @@ use crate::DlnaConfig;
 pub fn device_description(config: &DlnaConfig) -> String {
 	format!(
 		r#"<?xml version="1.0"?>
-<root xmlns="urn:schemas-upnp-org:device-1-0">
+<root xmlns="urn:schemas-upnp-org:device-1-0" xmlns:dlna="urn:schemas-dlna-org:device-1-0">
   <specVersion><major>1</major><minor>0</minor></specVersion>
   <URLBase>http://{}:{}</URLBase>
   <device>
@@ -13,6 +13,7 @@ pub fn device_description(config: &DlnaConfig) -> String {
     <modelName>Spritz</modelName>
     <modelNumber>0.1</modelNumber>
     <UDN>uuid:{}</UDN>
+    <dlna:X_DLNADOC xmlns:dlna="urn:schemas-dlna-org:device-1-0">DMS-1.50</dlna:X_DLNADOC>
     <serviceList>
       <service>
         <serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>

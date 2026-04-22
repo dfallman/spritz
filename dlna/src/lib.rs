@@ -24,7 +24,15 @@ pub struct DlnaConfig {
 	pub local_ip: IpAddr,
 	pub video_dirs: Vec<PathBuf>,
 	pub videos: Vec<PathBuf>,
+	/// File sizes parallel to `videos`; 0 when stat() failed.
+	pub video_sizes: Vec<u64>,
 }
+
+/// DLNA protocolInfo 4th field: byte-seek (OP=01), original format (CI=0),
+/// and flags for streaming + bg-transfer + conn-stalling + DLNA 1.5.
+/// Strict clients like Infuse reject streams without these.
+pub const DLNA_CONTENT_FEATURES: &str =
+	"DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000";
 
 const XML_UTF8: &str = "text/xml; charset=\"utf-8\"";
 const SERVER: &str = "Linux/5.0 UPnP/1.0 Spritz/0.1";
