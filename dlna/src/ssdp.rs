@@ -27,7 +27,10 @@ pub async fn run(config: Arc<DlnaConfig>) -> anyhow::Result<()> {
 	println!("SSDP: listening on 239.255.255.250:1900");
 
 	let mut buf = vec![0u8; 2048];
-	let mut interval = tokio::time::interval(Duration::from_secs(900));
+	// Re-announce every 3 minutes. UPnP lets us go up to max-age/2 (~15min)
+	// but on WiFi a single datagram can be dropped; re-advertising often
+	// gives flaky clients (Apple TV / tvOS) more chances to hear us.
+	let mut interval = tokio::time::interval(Duration::from_secs(180));
 	interval.tick().await; // discard the immediate first tick
 
 	let ctrl_c = tokio::signal::ctrl_c();
