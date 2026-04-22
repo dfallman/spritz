@@ -5,13 +5,14 @@ publish = false
 semver_check = false
 # Annotated tag per release (release-plz creates annotated tags by default).
 git_tag_name = "v{{ version }}"
-# Let cargo-dist own the GitHub Release — it needs to create it to attach
-# cross-compiled binaries. release-plz only pushes the tag here.
-git_release_enable = false
+# release-plz creates an empty GitHub Release (body = changelog) on release;
+# the release.yml workflow then attaches cross-compiled binaries to it via
+# `gh release upload`. Keeping this true so release-plz is the single source
+# of truth for "is this released".
+git_release_enable = true
+git_release_body = """{{ changelog }}"""
 # Title of the release PR.
 pr_name = "chore(release): update version to {{ version }}"
-# Commit message release-plz writes once the PR is merged / when it pushes
-# the version bump directly.
 pr_labels = ["release"]
 changelog_update = true
 changelog_path = "./CHANGELOG.md"
