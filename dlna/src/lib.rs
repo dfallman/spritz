@@ -26,6 +26,21 @@ pub struct DlnaConfig {
 	pub media_files: Vec<PathBuf>,
 	/// File sizes parallel to `media_files`; 0 when stat() failed.
 	pub media_sizes: Vec<u64>,
+	/// Flat list of every folder reachable from a source dir that contains
+	/// media (directly or transitively). The first `media_dirs.len()` entries
+	/// are the source roots; subsequent entries are subfolders discovered while
+	/// indexing. Referenced by DIDL ids `f:N` in the "By folder" view.
+	pub folder_nodes: Vec<FolderNode>,
+}
+
+#[derive(Clone)]
+pub struct FolderNode {
+	pub path: PathBuf,
+	pub display_name: String,
+	/// Direct subfolder indices into `DlnaConfig::folder_nodes`.
+	pub subfolder_indices: Vec<usize>,
+	/// Indices into `DlnaConfig::media_files` for files sitting directly in this folder.
+	pub media_indices: Vec<usize>,
 }
 
 /// DLNA protocolInfo 4th field: byte-seek (OP=01), original format (CI=0),
