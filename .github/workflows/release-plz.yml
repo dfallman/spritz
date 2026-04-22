@@ -34,11 +34,28 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run release-plz
+        id: release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # release-plz doesn't create a GitHub Release (see release-plz.toml:
+      # git_release_enable = false). Instead, it pushes the tag and we
+      # dispatch cargo-dist's release workflow to build + publish binaries.
+      # workflow_dispatch is one of the few events that fires downstream
+      # workflows even from GITHUB_TOKEN, so no PAT is required.
+      - name: Dispatch cargo-dist release workflow
+        if: ${{ steps.release-plz.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          # releases output is a JSON array; grab the tag of the first (only) entry
+          tag=$(printf '%s' "$RELEASES" | jq -r '.[0].tag')
+          echo "Dispatching release.yml for tag $tag"
+          gh workflow run release.yml -f tag="$tag"
 
   release-plz-pr:
     name: Release-plz PR

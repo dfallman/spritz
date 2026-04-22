@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "spritz")]
-#[command(about = "Instant DLNA media server — run in any folder to share it on the network")]
+#[command(about = "Nano DLNA media server — run in any folder to share it on the network")]
 struct Cli {
 	/// Folders to serve (defaults to current directory)
 	#[arg(value_name = "FOLDER")]
