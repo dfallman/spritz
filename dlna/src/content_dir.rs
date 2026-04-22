@@ -73,7 +73,11 @@ pub async fn handle_connectionmanager(
 				<PeerConnectionID>-1</PeerConnectionID>\
 				<Direction>Output</Direction>\
 				<Status>OK</Status>";
-			soap::ok(soap::response("GetCurrentConnectionInfo", CM_SERVICE, inner))
+			soap::ok(soap::response(
+				"GetCurrentConnectionInfo",
+				CM_SERVICE,
+				inner,
+			))
 		}
 		_ => soap::err(soap::fault(401, "Invalid Action")),
 	}
@@ -87,7 +91,8 @@ const VIDEO_ID: &str = "V";
 const AUDIO_ID: &str = "A";
 
 fn browse(body: &str, config: &DlnaConfig) -> Response {
-	let object_id = soap::extract_tag_value(body, "ObjectID").unwrap_or_else(|| ROOT_ID.to_string());
+	let object_id =
+		soap::extract_tag_value(body, "ObjectID").unwrap_or_else(|| ROOT_ID.to_string());
 	let browse_flag = soap::extract_tag_value(body, "BrowseFlag")
 		.unwrap_or_else(|| "BrowseDirectChildren".to_string());
 	let start: usize = soap::extract_tag_value(body, "StartingIndex")
@@ -116,7 +121,10 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 
 	let (didl, returned, total_matches) = match (object_id.as_str(), browse_flag.as_str()) {
 		(ROOT_ID, "BrowseMetadata") => {
-			let child_count = [&video_idx, &audio_idx].iter().filter(|v| !v.is_empty()).count();
+			let child_count = [&video_idx, &audio_idx]
+				.iter()
+				.filter(|v| !v.is_empty())
+				.count();
 			let xml = format!(
 				r#"<container id="0" parentID="-1" restricted="1" childCount="{child_count}">
     <dc:title>Spritz</dc:title>
@@ -135,7 +143,11 @@ fn browse(body: &str, config: &DlnaConfig) -> Response {
 			}
 			let total = containers.len();
 			let slice_start = start.min(total);
-			let slice_end = if count == 0 { total } else { (start + count).min(total) };
+			let slice_end = if count == 0 {
+				total
+			} else {
+				(start + count).min(total)
+			};
 			let slice = &containers[slice_start..slice_end];
 			(didl_wrap(slice), slice.len(), total)
 		}
@@ -193,10 +205,19 @@ fn category_children(
 ) -> (String, usize, usize) {
 	let total = indices.len();
 	let slice_start = start.min(total);
-	let slice_end = if count == 0 { total } else { (start + count).min(total) };
+	let slice_end = if count == 0 {
+		total
+	} else {
+		(start + count).min(total)
+	};
 	let items: Vec<String> = indices[slice_start..slice_end]
 		.iter()
-		.filter_map(|&i| config.media_files.get(i).and_then(|p| item_xml(i, p, parent, config)))
+		.filter_map(|&i| {
+			config
+				.media_files
+				.get(i)
+				.and_then(|p| item_xml(i, p, parent, config))
+		})
 		.collect();
 	let returned = items.len();
 	(didl_wrap(&items), returned, total)

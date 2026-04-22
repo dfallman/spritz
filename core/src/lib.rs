@@ -8,10 +8,10 @@ pub fn find_media(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 			let path = entry.path();
 			if path.is_dir() {
 				found.append(&mut find_media(&path)?);
-			} else if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-				if mime_for_ext(ext).is_some() {
-					found.push(path);
-				}
+			} else if let Some(ext) = path.extension().and_then(|s| s.to_str())
+				&& mime_for_ext(ext).is_some()
+			{
+				found.push(path);
 			}
 		}
 	}

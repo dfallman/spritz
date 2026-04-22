@@ -18,7 +18,9 @@ pub async fn run(config: Arc<DlnaConfig>) -> anyhow::Result<()> {
 	let socket = match create_socket(local_ipv4) {
 		Ok(s) => s,
 		Err(e) => {
-			eprintln!("SSDP: could not bind port 1900 ({e}) — DLNA discovery unavailable, HTTP endpoints still active");
+			eprintln!(
+				"SSDP: could not bind port 1900 ({e}) — DLNA discovery unavailable, HTTP endpoints still active"
+			);
 			return Ok(());
 		}
 	};
@@ -102,16 +104,18 @@ fn create_socket(local_ip: Ipv4Addr) -> anyhow::Result<UdpSocket> {
 }
 
 fn join_all_interfaces(socket: &socket2::Socket, multicast_addr: &Ipv4Addr) -> usize {
-	let Ok(ifaces) = if_addrs::get_if_addrs() else { return 0 };
+	let Ok(ifaces) = if_addrs::get_if_addrs() else {
+		return 0;
+	};
 	let mut joined = 0;
 	for iface in ifaces {
 		if iface.is_loopback() {
 			continue;
 		}
-		if let if_addrs::IfAddr::V4(v4) = iface.addr {
-			if socket.join_multicast_v4(multicast_addr, &v4.ip).is_ok() {
-				joined += 1;
-			}
+		if let if_addrs::IfAddr::V4(v4) = iface.addr
+			&& socket.join_multicast_v4(multicast_addr, &v4.ip).is_ok()
+		{
+			joined += 1;
 		}
 	}
 	joined
@@ -124,10 +128,7 @@ fn nt_usn_pairs(uuid: &str) -> [(String, String); 5] {
 			"upnp:rootdevice".into(),
 			format!("uuid:{uuid}::upnp:rootdevice"),
 		),
-		(
-			format!("uuid:{uuid}"),
-			format!("uuid:{uuid}"),
-		),
+		(format!("uuid:{uuid}"), format!("uuid:{uuid}")),
 		(
 			"urn:schemas-upnp-org:device:MediaServer:1".into(),
 			format!("uuid:{uuid}::urn:schemas-upnp-org:device:MediaServer:1"),
