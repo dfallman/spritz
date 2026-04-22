@@ -206,7 +206,12 @@ async fn respond_to_msearch(msg: &str, src: SocketAddr, socket: &UdpSocket, conf
 			 USN: {usn}\r\n\
 			 \r\n"
 		);
-		let _ = socket.send_to(response.as_bytes(), src).await;
+		// Send 3× with small gaps — single UDP datagrams on WiFi get dropped
+		// often enough that tvOS clients miss the first one.
+		for _ in 0..3 {
+			let _ = socket.send_to(response.as_bytes(), src).await;
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
 	}
 }
 
