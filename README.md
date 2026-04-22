@@ -11,7 +11,7 @@ cd /mnt/nas/movies
 spritz
 ```
 
-or, alternatively:
+or, alternatively, run it from anywhere with one or many paths to share:
 
 ```
 spritz /mnt/nas/movies /mnt/nas/music
@@ -28,7 +28,7 @@ SSDP: listening on 239.255.255.250:1900
 
 DLNA clients — smart TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and the like — should see it appear in their network sources within a few seconds.
 
-<img width="1684" height="1148" alt="CleanShot 2026-04-22 at 12 53 55@2x" src="https://github.com/user-attachments/assets/86f45ac6-a8aa-400a-9fd2-7752c7dc14fb" />
+<img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
 
 ## Features
 
