@@ -51,7 +51,10 @@ pub fn router<S: Clone + Send + Sync + 'static>(config: Arc<DlnaConfig>) -> Rout
 				let cfg = Arc::clone(&cfg_desc);
 				async move {
 					let xml = description::device_description(&cfg);
-					([(header::CONTENT_TYPE, XML_UTF8), (header::SERVER, SERVER)], xml)
+					(
+						[(header::CONTENT_TYPE, XML_UTF8), (header::SERVER, SERVER)],
+						xml,
+					)
 				}
 			}),
 		)
