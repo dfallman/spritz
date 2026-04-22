@@ -10,5 +10,8 @@ members = [
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/dfallman/spritz"
+authors = ["Daniel Fallman"]
 
 [workspace.dependencies]

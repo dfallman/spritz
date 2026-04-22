@@ -2,6 +2,10 @@
 name = "cli"
 version.workspace = true
 edition = "2024"
+description = "Nano DLNA media server — run in any folder to share it on the LAN."
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
 
 [[bin]]
 name = "spritz"
