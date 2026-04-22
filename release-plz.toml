@@ -17,6 +17,25 @@ pr_labels = ["release"]
 changelog_update = true
 changelog_path = "./CHANGELOG.md"
 
+# Unified workspace versioning: all four crates bump to the same X.Y.Z,
+# but only one (`cli`, the user-facing binary) gets a git tag and GitHub
+# Release. Without this, every crate tries to create the same tag name
+# and the second one hits a 422 "Reference already exists".
+[[package]]
+name = "spritz-core"
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "api"
+git_tag_enable = false
+git_release_enable = false
+
+[[package]]
+name = "dlna"
+git_tag_enable = false
+git_release_enable = false
+
 [changelog]
 header = """# Changelog
 
