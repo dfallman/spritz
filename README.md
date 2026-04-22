@@ -143,32 +143,43 @@ New-NetFirewallRule -DisplayName "Spritz SSDP" `
 
 ---
 
-### Under the hood
+# Under the hood
 
-Spritz implements DLNA/UPnP AV directly rather than wrapping an existing library:
+Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library.
 
-**Discovery (SSDP).** On startup, Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900`, listens for `M-SEARCH` requests, and responds unicast. Announcements repeat every 3 minutes so flaky WiFi clients get more chances to catch them. M-SEARCH responses honor the client's `MX` delay (UPnP 1.0 §1.2.3) and each NT is sent three times with small gaps to survive datagram loss on WiFi. On exit it sends `ssdp:byebye`.
+### Discovery (SSDP)
+Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900` on startup, responds to `M-SEARCH` requests (honoring the client's `MX` delay per UPnP 1.0 §1.2.3), and sends `ssdp:byebye` on exit. Announcements repeat every 3 minutes, and each NT is sent three times with small gaps to survive datagram loss on WiFi.
 
-**Device description.** `GET /upnp/description.xml` returns a UPnP `MediaServer:1` device description listing the ContentDirectory and ConnectionManager services. The `<dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>` element identifies the server as a DLNA DMS so strict clients (tvOS Infuse, SenPlayer) accept it.
+### Device description
+`GET /upnp/description.xml` returns a `MediaServer:1` description advertising the ContentDirectory and ConnectionManager services. The `<dlna:X_DLNADOC>DMS-1.50</dlna:X_DLNADOC>` tag marks it as a DLNA DMS, which strict clients (tvOS Infuse, SenPlayer) require.
 
-**Browse (SOAP).** `POST /upnp/control/contentdirectory` handles `Browse`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. The root container has three children — `V` (Videos, flat list of video files), `A` (Music, flat list of audio files), and `F` (By folder, recursive directory mirror). Empty containers are hidden. `<res>` tags carry DLNA.ORG flags (`OP=01` byte-seek, plus the standard streaming FLAGS) and `size=`, and file responses set `transferMode.dlna.org: Streaming` + `contentFeatures.dlna.org` so Infuse accepts the stream.
+### Browse (SOAP) 
+`POST /upnp/control/contentdirectory` handles `Browse`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. The root has three children: `V` (Videos, flat), `A` (Music, flat), and `F` (By folder, recursive). Empty containers are hidden. `<res>` tags include `size=` and DLNA.ORG flags (`OP=01` byte-seek plus standard streaming flags); file responses set `transferMode.dlna.org: Streaming` and `contentFeatures.dlna.org` so Infuse will play them.
 
-**File serving.** Each source directory is mounted at `/m/{index}/`. Files stream over HTTP with range-request support, handled by `tower-http`'s `ServeDir`.
+### File serving
+Each source directory is mounted at `/m/{index}/` and served over HTTP with range support via `tower-http`'s `ServeDir`.
+
+
+## Troubleshooting
+DLNA is by nature a little fiddly, especially combined with some devices/operating systems (looking at you, Apple TV).
+
+If your client can't find Spritz, check your firewall rules first (on both the server and client side, but typically the server side): SSDP (for DLNA) needs UDP 1900 open, and HTTP needs your serving port (8080 by default).
+
+### Tips and tricks
+On Apple TV, Infuse tends to work better than VLC. However, if you're using VLC and can't find the share, you can bypass discovery entirely by pasting the M3U URL into VLC: `Media` → `Open Network Stream` → `http://192.168.X.X:8080/spritz`. If that plays, the server is fine and the issue is discovery.
+
+Restart VLC *after* Spritz is running — VLC only scans at startup and on NOTIFY packets.
+
 
 ### Device notes
 
-- **Samsung (Tizen):** expects `<dc:date>` on each DIDL item — included.
-- **LG (webOS):** browsing works, but you may see an "unknown device" icon since there's no icon endpoint yet.
+- **Samsung (Tizen):** requires `<dc:date>` on each DIDL item — included.
+- **LG (webOS):** works, but shows an "unknown device" icon (no icon endpoint yet).
 - **Sony / Bravia:** strict about `Content-Type: text/xml; charset="utf-8"` — handled.
-- **Apple TV — Infuse.** Works on both tvOS and iOS/iPadOS. The strict client needed the full DIDL treatment (Videos/Music containers, size/flags on `<res>`, DLNA response headers) before playback worked on tvOS.
-- **Apple TV — VLC.** Works on iOS/iPadOS via DLNA. tvOS VLC occasionally misses the SSDP announcement depending on the AP; if it doesn't appear, add the M3U URL manually.
+- **Apple TV — Infuse:** works on tvOS and iOS/iPadOS. Required the full DIDL treatment (Videos/Music containers, size/flags on `<res>`, DLNA response headers) for tvOS playback.
+- **Apple TV — VLC:** works on iOS/iPadOS. tvOS VLC sometimes misses the SSDP announcement depending on the AP; add the M3U URL manually if it doesn't appear.
 
-# Troubleshooting
-If clients (apps, TVs, etc.) can't find Spritz, check firewall rules first. SSDP needs UDP 1900, and HTTP needs whatever port you're serving on (8080 by default).
 
-For a quick sanity check that bypasses discovery entirely, paste the M3U URL directly into VLC: `Media → Open Network Stream → http://192.168.X.X:8080/spritz`. If that plays, the server is fine and the issue is with discovery.
-
-Restart VLC *after* Spritz is running, not before — VLC only scans at startup and when it receives a NOTIFY packet.
 
 
 ## License
