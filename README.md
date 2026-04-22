@@ -6,12 +6,12 @@
 
 `spritz` is a terminal-based, nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
 
+<img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
+
 ```
 cd /mnt/nas/movies
 spritz
 ```
-
-<img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
 
 or, alternatively, run it from anywhere with one or many paths to share:
 
