@@ -14,13 +14,13 @@ cd /mnt/nas/movies
 spritz
 ```
 
-or, alternatively, run it from anywhere with one or many paths to share:
+..or, alternatively, run it from anywhere and specify which path(s) to serve up:
 
 ```
 spritz /mnt/nas/movies /mnt/nas/music
 ```
 
-DLNA clients — such as Smart TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and the like — should see it appear in their network sources within a few seconds.
+DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see it appear in their network sources within a few seconds. Just make sure your client supports DLNA.
 
 
 ## Features
