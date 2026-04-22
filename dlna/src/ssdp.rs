@@ -189,6 +189,25 @@ async fn announce_byebye(socket: &UdpSocket, config: &DlnaConfig) {
 
 async fn respond_to_msearch(msg: &str, src: SocketAddr, socket: &UdpSocket, config: &DlnaConfig) {
 	let st = header_value(msg, "ST").unwrap_or_default();
+
+	// UPnP 1.0 §1.2.3: client sends MX (1-5s) and the server must wait a
+	// uniformly-random interval in [0, MX] before responding, so multiple
+	// servers on a LAN don't flood the client's UDP buffer all at once.
+	// Responding immediately can cause strict clients to drop some
+	// responses, presenting as flaky discovery.
+	let mx: u64 = header_value(msg, "MX")
+		.and_then(|s| s.trim().parse().ok())
+		.unwrap_or(0)
+		.clamp(0, 5);
+	if mx > 0 {
+		let seed = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map(|d| d.as_nanos() as u64)
+			.unwrap_or(0);
+		let delay_ms = seed % (mx * 1000);
+		tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+	}
+
 	let location = format!(
 		"http://{}:{}/upnp/description.xml",
 		config.local_ip, config.http_port
