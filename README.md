@@ -43,7 +43,13 @@ DLNA clients — smart TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, and t
 
 ## Why Spritz?
 
-Most DLNA servers (MiniDLNA/ReadyMedia, Rygel, Serviio, Plex) are persistent daemons: install a service, point a config file at your media library, maintain a database, and leave it running. Spritz is the opposite — point it at a folder, share it for as long as you need, Ctrl+C when done. No config, no database, no indexing job, no background service. Meant for laptops, ad-hoc shares, and folders you don't serve every day.
+Most DLNA servers (MiniDLNA/ReadyMedia, Rygel, Serviio, Plex) are persistent daemons: install a service, point a config file at your media library, maintain a database, and leave it running. Spritz is the opposite — point it at a folder, share it for as long as you need, Ctrl+C when done. No config, no database, no indexing job, no background service. 
+
+While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers such as Plex, Jellyfin, Emby, and others.
+
+**Note**: Spritz parses the file tree on start, but it doesn't monitor it for changes. Hence, if you add a file to a share, it won't show until you restart Spritz.
+
+
 
 ## Install
 
@@ -59,7 +65,7 @@ Each archive ships with a `.sha256` checksum.
 
 ### From source
 
-Requires a Rust toolchain — install via [rustup](https://rustup.rs/). Then:
+Requires a Rust toolchain — which is easily installed via [rustup](https://rustup.rs/). Then:
 
 ```bash
 git clone https://github.com/dfallman/spritz
