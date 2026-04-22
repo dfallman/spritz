@@ -10,7 +10,7 @@ pub async fn run(config: Arc<DlnaConfig>) -> anyhow::Result<()> {
 	let local_ipv4 = match config.local_ip {
 		IpAddr::V4(ip) => ip,
 		IpAddr::V6(_) => {
-			eprintln!("SSDP: IPv6 local address not supported — DLNA discovery unavailable");
+			tracing::warn!("SSDP: IPv6 local address not supported — DLNA discovery unavailable");
 			return Ok(());
 		}
 	};
@@ -18,7 +18,7 @@ pub async fn run(config: Arc<DlnaConfig>) -> anyhow::Result<()> {
 	let socket = match create_socket(local_ipv4) {
 		Ok(s) => s,
 		Err(e) => {
-			eprintln!(
+			tracing::warn!(
 				"SSDP: could not bind port 1900 ({e}) — DLNA discovery unavailable, HTTP endpoints still active"
 			);
 			return Ok(());
@@ -42,7 +42,7 @@ pub async fn run(config: Arc<DlnaConfig>) -> anyhow::Result<()> {
 		tokio::select! {
 			_ = &mut ctrl_c => {
 				announce_byebye(&socket, &config).await;
-				println!("\nSSDP: sent ssdp:byebye, shutting down");
+				tracing::info!("SSDP: sent ssdp:byebye, shutting down");
 				std::process::exit(0);
 			}
 			_ = interval.tick() => {
@@ -85,21 +85,10 @@ fn create_socket(local_ip: Ipv4Addr) -> anyhow::Result<UdpSocket> {
 		socket.join_multicast_v4(&multicast_ip, &local_ip)?;
 	}
 
-	// SAFETY: into_raw_fd/socket consumes the socket2::Socket, transferring
-	// fd ownership. from_raw_fd/socket immediately takes that ownership.
-	let std_socket: std::net::UdpSocket = unsafe {
-		#[cfg(unix)]
-		{
-			use std::os::unix::io::{FromRawFd, IntoRawFd};
-			std::net::UdpSocket::from_raw_fd(socket.into_raw_fd())
-		}
-		#[cfg(windows)]
-		{
-			use std::os::windows::io::{FromRawSocket, IntoRawSocket};
-			std::net::UdpSocket::from_raw_socket(socket.into_raw_socket())
-		}
-	};
-
+	// socket2::Socket → std::net::UdpSocket via the infallible `From` impl
+	// that socket2 provides; lets us avoid raw-fd juggling and keep the
+	// codebase unsafe-free.
+	let std_socket: std::net::UdpSocket = socket.into();
 	Ok(UdpSocket::from_std(std_socket)?)
 }
 
