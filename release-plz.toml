@@ -52,7 +52,7 @@ commit_parsers = [
     { message = "^revert", group = "Reverted" },
 ]
 
-# Drop merge commits and anything that doesn't match a parser.
-filter_unconventional = true
+# Commits that don't match any of the parsers above are silently dropped
+# from the changelog (release-plz default behavior — no opt-in flag needed).
 protect_breaking_commits = true
 sort_commits = "newest"
