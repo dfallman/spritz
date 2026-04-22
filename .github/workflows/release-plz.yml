@@ -22,6 +22,8 @@ jobs:
       # Needed so release-plz can list the PR associated with each
       # commit when building the GitHub Release notes.
       pull-requests: read
+      # Needed for the final step to dispatch release.yml (cargo-dist).
+      actions: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
