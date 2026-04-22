@@ -5,10 +5,9 @@ publish = false
 semver_check = false
 # Annotated tag per release (release-plz creates annotated tags by default).
 git_tag_name = "v{{ version }}"
-# Enable a single GitHub Release for the whole workspace.
-git_release_enable = true
-# Use the workspace-level CHANGELOG as the release body.
-git_release_body = """{{ changelog }}"""
+# Let cargo-dist own the GitHub Release — it needs to create it to attach
+# cross-compiled binaries. release-plz only pushes the tag here.
+git_release_enable = false
 # Title of the release PR.
 pr_name = "chore(release): update version to {{ version }}"
 # Commit message release-plz writes once the PR is merged / when it pushes
