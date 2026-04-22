@@ -1,7 +1,7 @@
 use axum::{
 	Router,
 	body::Body,
-	extract::Request,
+	extract::{DefaultBodyLimit, Request},
 	http::{StatusCode, header},
 	response::Response,
 	routing::{any, get, post},
@@ -9,6 +9,8 @@ use axum::{
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tower_http::timeout::TimeoutLayer;
 use uuid::Uuid;
 
 pub mod content_dir;
@@ -107,6 +109,16 @@ pub fn router<S: Clone + Send + Sync + 'static>(config: Arc<DlnaConfig>) -> Rout
 		)
 		.route("/upnp/event/contentdirectory", any(event_handler))
 		.route("/upnp/event/connectionmanager", any(event_handler))
+		// SOAP Browse bodies are <1 KiB in practice; cap at 64 KiB to bound
+		// memory if a misbehaving client sends something huge. Applies only
+		// to /upnp/* — the /m/{i}/ ServeDir is mounted outside this router.
+		.layer(DefaultBodyLimit::max(64 * 1024))
+		// UPnP control actions are cheap computations; 30s is generous and
+		// protects against stalled connections tying up tasks forever.
+		.layer(TimeoutLayer::with_status_code(
+			StatusCode::REQUEST_TIMEOUT,
+			Duration::from_secs(30),
+		))
 }
 
 /// Handles SUBSCRIBE and UNSUBSCRIBE for both event endpoints.
