@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::path::PathBuf;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "spritz")]
@@ -16,6 +17,14 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+	tracing_subscriber::fmt()
+		.without_time()
+		.with_target(false)
+		.with_env_filter(
+			EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+		)
+		.init();
+
 	let cli = Cli::parse();
 
 	let folders = if cli.folders.is_empty() {
@@ -31,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 	}
 
 	if let Err(e) = api::start_server(cli.port, folders).await {
-		eprintln!("Server error: {e}");
+		tracing::error!("Server error: {e}");
 		std::process::exit(1);
 	}
 

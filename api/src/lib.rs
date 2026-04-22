@@ -27,13 +27,13 @@ pub async fn start_server(port: u16, media_dirs: Vec<PathBuf>) -> anyhow::Result
 	for dir in &media_dirs {
 		match find_media(dir) {
 			Ok(mut found) => media_files.append(&mut found),
-			Err(e) => eprintln!("Warning: could not scan {}: {e}", dir.display()),
+			Err(e) => tracing::warn!("could not scan {}: {e}", dir.display()),
 		}
 	}
 
-	println!("Indexed {} media file(s):", media_files.len());
+	println!("Indexed {} media file(s)", media_files.len());
 	for file in &media_files {
-		println!("  {}", file.display());
+		tracing::debug!("  {}", file.display());
 	}
 
 	let media_sizes: Vec<u64> = media_files
@@ -83,7 +83,9 @@ pub async fn start_server(port: u16, media_dirs: Vec<PathBuf>) -> anyhow::Result
 		.iter()
 		.enumerate()
 		.fold(
-			Router::new().route("/spritz", get(generate_m3u)),
+			Router::new()
+				.route("/spritz", get(generate_m3u))
+				.route("/health", get(|| async { "ok" })),
 			|router, (i, dir)| {
 				router.nest_service(
 					&format!("/m/{i}"),
