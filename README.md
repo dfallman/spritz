@@ -4,7 +4,7 @@
 [![release](https://img.shields.io/github/v/release/dfallman/spritz)](https://github.com/dfallman/spritz/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`spritz` is a terminal-based, nano DLNA media server. Run it in a folder and that folder's video and audio becomes instantly available from TVs, phones, speakers, and other media players on your local network.
+`spritz` is a terminal-based, nano DLNA media server. Run it in a folder, and that folder's video and audio files become available for any TVs, phones, speakers, and other media players on your local network using the DLNA prototcol.
 
 <img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
 
@@ -20,7 +20,7 @@ spritz
 spritz /mnt/nas/movies /mnt/nas/music
 ```
 
-DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see it appear in their network sources within a few seconds. Just make sure your client supports DLNA.
+DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see the spritz share appear in their network sources within a few seconds, as long as your source supports DLNA.
 
 
 ## Features
@@ -36,12 +36,13 @@ DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Ko
 
 ## Why Spritz?
 
-Most DLNA servers (MiniDLNA/ReadyMedia, Rygel, Serviio, Plex) are persistent daemons: install a service, point a config file at your media library, maintain a database, and leave it running. Spritz is the opposite — point it at a folder, share it for as long as you need, Ctrl+C when done. No config, no database, no indexing job, no background service. 
+Most DLNA and media servers servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running. 
 
-While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers mentioned above.
+Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. As we say in Australia, "no drama": no config, no database, no indexing job, no background service. 
 
-**Note**: Spritz parses the file tree when it starts up, but it doesn't monitor it for changes. Hence, if you add a file to a share, it won't show until you restart Spritz.
+While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder tool and spritz will do it's thing.
 
+**Note**: If you leave it running, note that Spritz parses the file tree when on start up, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz.
 
 ## Install
 
