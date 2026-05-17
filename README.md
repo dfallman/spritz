@@ -40,7 +40,7 @@ Most DLNA and media servers servers (such as Plex, Jellyfin, Emby, MiniDLNA/Read
 
 Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. As we say in Australia, "no drama": no config, no database, no indexing job, no background service. 
 
-While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder tool and spritz will do it's thing.
+While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder tool and spritz will do its thing.
 
 **Note**: If you leave it running, note that Spritz parses the file tree when on start up, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz.
 
