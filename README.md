@@ -4,23 +4,23 @@
 [![release](https://img.shields.io/github/v/release/dfallman/spritz)](https://github.com/dfallman/spritz/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`spritz` is a terminal-based, nano DLNA media server. Run it in a folder, and that folder's video and audio files become available for any TVs, phones, speakers, and other media players on your local network using the DLNA prototcol.
+`spritz` is a terminal-based, nano DLNA media server. Run it in a folder, and that folder's video and audio files become available to any TVs, phones, speakers, and other media players on your local network using the DLNA protocol.
 
 <img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
 
-### Usage
+### Quick start
 ```
 cd /mnt/nas/movies
 spritz
 ```
 
-..or, alternatively, run it from anywhere and specify which path(s) to serve up:
+...or, alternatively, run it from anywhere and specify which path(s) to serve up:
 
 ```
 spritz /mnt/nas/movies /mnt/nas/music
 ```
 
-DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see the spritz share appear in their network sources within a few seconds, as long as your source supports DLNA.
+DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see the spritz share appear in their network sources within a few seconds, as long as your client supports DLNA.
 
 
 ## Features
@@ -36,13 +36,13 @@ DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Ko
 
 ## Why Spritz?
 
-Most DLNA and media servers servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running. 
+Most DLNA and media servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running.
 
-Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. As we say in Australia, "no drama": no config, no database, no indexing job, no background service. 
+Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. As we say in Australia, "no drama": no config, no database, no indexing job, no background service.
 
-While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder tool and spritz will do its thing.
+While Spritz is primarily meant as a means for serving up laptop folders, ad-hoc shares, and other folders you don't serve every day, it can also be used as a no-nonsense alternative to the heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder too and spritz will do its thing.
 
-**Note**: If you leave it running, note that Spritz parses the file tree when on start up, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz.
+**Note**: If you leave it running, note that Spritz parses the file tree at startup, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz.
 
 ## Install
 
@@ -58,7 +58,7 @@ Each archive ships with a `.sha256` checksum.
 
 ### From source
 
-To compile Spritz from source, you’ll need Rust. Use [rustup](https://rustup.rs/) for the installation; it ensures you have the latest version of cargo. Package managers (like `apt` and `brew`) don't alway have the latest version of Rust.
+To compile Spritz from source, you'll need Rust. Use [rustup](https://rustup.rs/) for the installation; it ensures you have the latest version of cargo. Package managers (like `apt` and `brew`) don't always have the latest version of Rust.
 
 Once installed:
 ```bash
@@ -98,9 +98,9 @@ spritz --port 9000 /media/videos
 
 ## Connecting a client
 
-- **Smart TVs, game consoles, or media players (DLNA).** Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
+- **Smart TVs, game consoles, or media players (DLNA).** Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside, you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
 
-- **VLC.** `Media → Open Network Stream → http:/<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug'n'Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
+- **VLC.** `Media → Open Network Stream → http://<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug and Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
 
 - **Infuse (Apple TV / iOS / iPadOS).** `Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
 
@@ -142,12 +142,12 @@ spritz --port 9000 /media/videos
 | Samsung (Tizen)                       | Works  | Requires `<dc:date>` on each DIDL item — included                  |
 | LG (webOS)                            | Works  | Shows an "unknown device" icon (no icon endpoint yet)              |
 | Sony / Bravia                         | Works  | Strict about `Content-Type: text/xml; charset="utf-8"` — handled   |
-| Apple TV — Infuse (tvOS, iOS, iPadOS) | Works  | Required the full DIDL treatment for tvOS playback                 |
-| Apple TV — VLC (iOS, iPadOS)          | Works  | tvOS VLC sometimes misses SSDP; add the M3U URL manually           |
+| Apple TV — Infuse (tvOS, iOS, iPadOS) | Works  | Requires the full DIDL treatment for tvOS playback                 |
+| Apple TV — VLC (tvOS, iOS, iPadOS)    | Works  | tvOS VLC sometimes misses SSDP; add the M3U URL manually           |
 
 ## Troubleshooting
 
-DLNA is fiddly by nature, especially combined with some devices and operating systems (looking at you, Apple TV).
+DLNA is fiddly by nature, especially in combination with certain devices and operating systems (looking at you, Apple TV).
 
 If your client can't find Spritz, check your firewall rules first (on both the server and client side, but typically the server side): SSDP needs UDP 1900 open, and HTTP needs your serving port (8080 by default).
 
@@ -187,7 +187,8 @@ Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full protocol walkthrough.
 
 ## Note on AI use
-The author of this application has been writing code for over 30 years. Lately, LLM agent-enhanced coding practices have rekindled my sense of awe at what's possible. This project has been built using a range of tools, Anthropic's Claude Code (using Opus 4.7) are among them.
+
+The author of this application has been writing code for over 30 years. Lately, LLM agent-enhanced coding practices have rekindled my sense of awe at what's possible. This project has been built using a range of tools, with Anthropic's Claude Code (using Opus 4.7) among them.
 
 Unlike some who dismiss anything touched by a coding agent as "slop," I don't see it that way. To me, these tools are a way to move much faster, explore many more ideas, and test those ideas and implementations more rigorously than I ever could on my own.
 
