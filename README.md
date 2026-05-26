@@ -58,7 +58,10 @@ Each archive ships with a `.sha256` checksum.
 
 ### From source
 
-To compile Spritz from source, you'll need Rust. Use [rustup](https://rustup.rs/) for the installation; it ensures you have the latest version of cargo. Package managers (like `apt` and `brew`) don't always have the latest version of Rust.
+To compile Spritz from source, you'll need Rust. Use [rustup](https://rustup.rs/) for the installation:
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
 
 Once installed:
 ```bash
