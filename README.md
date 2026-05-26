@@ -101,15 +101,19 @@ spritz --port 9000 /media/videos
 
 ## Connecting a client
 
-- **Smart TVs, game consoles, or media players (DLNA).** Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside, you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
+### Smart TVs, game consoles, or media players (DLNA)
+Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside, you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
 
-- **VLC.** `Media → Open Network Stream → http://<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug and Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
+### VLC
+`Media → Open Network Stream → http://<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug and Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
 
-- **Infuse (Apple TV / iOS / iPadOS).** `Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
+### Infuse (Apple TV / iOS / iPadOS)
+`Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
 
-- **Any M3U-capable player.** Point it at `http://<your-spritz-server-ip>:8080/spritz`.
+### Any M3U-capable player
+Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 
-**Note**: to find your server's IP, use `ipconfig` in the Windows Command Prompt, check `System Settings → Network` (or use `ipconfig getifaddr en0` in a terminal) on macOS, and run `ip addr` or `hostname -I` on Linux.
+**Note**: `<your-spritz-server-ip>` is the IP address of the machine you run spritz on, that's the "server" here — the "client" (see above) is the device from which you play your content. To find your server's IP, use `ipconfig` in the Windows Command Prompt. On macOS, check `System Settings → Network` (or use `ipconfig getifaddr en0` in a terminal). On linux, run `ip addr` or `hostname -I`.
 
 
 ## Supported formats
