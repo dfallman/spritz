@@ -42,7 +42,7 @@ Spritz is the opposite — you've downloaded a file, you point spritz opportunis
 
 While Spritz is primarily meant as a means for serving up folders ad hoc, that is folders you don't serve every day, it _can_ also be used as a no-nonsense alternative to the heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder too and spritz will do its thing.
 
-**Note**: If you leave it running, note that Spritz parses the file tree at startup, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz.
+**Note**: If you leave it running, note that Spritz parses the file tree at startup, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz. Alternatively, if you want to be fancy pants, try using something like [watchexec](https://github.com/watchexec/watchexec): `watchexec -r -- spritz` 
 
 ## Install
 
