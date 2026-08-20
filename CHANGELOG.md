@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [Unreleased]
+
+### Added
+
+- `--bind` and `--name` so a multi-homed host can pick an interface and a DLNA friendly name
+- ContentDirectory `Search` (title contains + video/audio class)
+- 48×48 PNG device icon at `GET /upnp/icon.png`
+- Sidecar subtitles (`.srt` / `.vtt` / `.ass`) served over HTTP and advertised as extra DIDL `<res>` tags
+- Access log (`info`) for `/m/`, `/upnp/`, and `/art/` requests
+- DIDL `duration` and `DLNA.ORG_PN` from file headers (MP4/MKV/WAV/FLAC) plus sidecar album art
+- UPnP event `NOTIFY` after `SUBSCRIBE` (ContentDirectory, ConnectionManager, MediaReceiverRegistrar)
+- Xbox `X_MS_MediaReceiverRegistrar` service (`IsAuthorized` / `IsValidated` always succeed)
+- IPv6 SSDP (`[FF02::C]:1900`) and dual-stack HTTP when `--bind` is unspecified
+
 ## [0.1.4] - 2026-04-22
 
 ### Added
@@ -27,12 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add audio support and restructure DIDL hierarchy for Infuse tvOS
+- Cross-platform release binaries via cargo-dist
 
 ## [0.1.1] - 2026-04-22
 
 ### Added
 
-- Add audio support and restructure DIDL hierarchy for Infuse tvOS
+- Initial public release automation (release-plz)
 
 <!-- release-plz inserts new version sections below this line -->
