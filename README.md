@@ -32,7 +32,7 @@ DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Ko
 - Supports video and audio formats (MP4/MKV/AVI/MOV/… and MP3/FLAC/OGG/…)
 - Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse and Search
 - Advertises sidecar subtitles (`.srt` / `.vtt` / `.ass`) next to matching media files
-- Advertises duration, DLNA profile names, and sidecar album art (`cover.jpg` / matching stem)
+- Advertises duration, resolution, honest DLNA profile names (from the file, not the extension), and sidecar album art (`cover.jpg` / matching stem)
 - Exposes an M3U playlist at `/spritz` for VLC, Infuse, and similar players
 - Sends `ssdp:byebye` on Ctrl+C so clients drop it immediately
 

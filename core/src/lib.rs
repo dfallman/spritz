@@ -4,8 +4,9 @@ use walkdir::WalkDir;
 
 mod meta;
 pub use meta::{
-	album_art_sidecar, dlna_org_pn, format_dlna_duration, has_embedded_art, probe_duration,
-	protocol_info,
+	AudioCodec, MediaInfo, VideoCodec, album_art_sidecar, dlna_org_pn, dlna_org_pn_for,
+	format_dlna_duration, has_embedded_art, probe_duration, probe_media, protocol_info,
+	protocol_info_pn,
 };
 
 /// Directory names we never descend into while indexing. NAS thumbnail

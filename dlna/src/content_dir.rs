@@ -591,7 +591,12 @@ fn item_xml(
 	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 	let mime = spritz_core::mime_for_ext(ext).unwrap_or("application/octet-stream");
 	let class = upnp_class_for_mime(mime);
-	let protocol = spritz_core::protocol_info(mime, ext, DLNA_CONTENT_FEATURES);
+	let pn = config
+		.media_pns
+		.get(index)
+		.map(String::as_str)
+		.filter(|s| !s.is_empty());
+	let protocol = spritz_core::protocol_info_pn(mime, pn, DLNA_CONTENT_FEATURES);
 
 	// Emit size= only when we know it — Infuse treats size="0" as "empty file".
 	let size_attr = match config.media_sizes.get(index).copied().unwrap_or(0) {
@@ -604,6 +609,13 @@ fn item_xml(
 		.map(String::as_str)
 		.filter(|s| !s.is_empty())
 		.map(|s| format!(r#" duration="{s}""#))
+		.unwrap_or_default();
+	let resolution_attr = config
+		.media_resolutions
+		.get(index)
+		.map(String::as_str)
+		.filter(|s| !s.is_empty())
+		.map(|s| format!(r#" resolution="{s}""#))
 		.unwrap_or_default();
 	let date = config
 		.media_dates
@@ -628,7 +640,7 @@ fn item_xml(
     <dc:title>{}</dc:title>
     <upnp:class>{class}</upnp:class>
     <dc:date>{date}</dc:date>{art}
-    <res protocolInfo="{protocol}"{size_attr}{duration_attr}>{}</res>{extra_res}
+    <res protocolInfo="{protocol}"{size_attr}{duration_attr}{resolution_attr}>{}</res>{extra_res}
   </item>"#,
 		xml_escape(&title),
 		xml_escape(&url),
@@ -777,6 +789,8 @@ mod tests {
 			media_sizes: vec![1],
 			media_dates: vec!["2020-01-01".into()],
 			media_durations: vec!["0:00:02.000".into()],
+			media_resolutions: vec![],
+			media_pns: vec![],
 			media_has_art: vec![true],
 			video_idx: vec![0],
 			audio_idx: vec![],
@@ -788,7 +802,41 @@ mod tests {
 		assert!(xml.contains("/m/0/clip.srt"), "{xml}");
 		assert!(xml.contains("text/srt"), "{xml}");
 		assert!(xml.contains(r#"duration="0:00:02.000""#), "{xml}");
-		assert!(xml.contains("DLNA.ORG_PN=AVC_MP4_MP_SD_AAC_MULT5"), "{xml}");
+		assert!(
+			!xml.contains("DLNA.ORG_PN=AVC_MP4"),
+			"unprobeable mp4 must not claim H.264: {xml}"
+		);
+		assert!(!xml.contains("resolution="), "{xml}");
 		assert!(xml.contains("/art/0"), "{xml}");
+	}
+
+	#[test]
+	fn item_xml_uses_probed_pn_and_resolution() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = tmp.path().join("clip.mp4");
+		std::fs::write(&movie, b"x").unwrap();
+
+		let config = DlnaConfig {
+			device_uuid: "u".into(),
+			friendly_name: "Spritz".into(),
+			http_port: 8080,
+			local_ip: "127.0.0.1".parse().unwrap(),
+			media_dirs: vec![tmp.path().to_path_buf()],
+			media_files: vec![movie.clone()],
+			media_sizes: vec![1],
+			media_dates: vec!["2020-01-01".into()],
+			media_durations: vec!["0:01:00.000".into()],
+			media_resolutions: vec!["1920x1080".into()],
+			media_pns: vec!["AVC_MP4_HP_HD_AAC".into()],
+			media_has_art: vec![false],
+			video_idx: vec![0],
+			audio_idx: vec![],
+			folder_nodes: vec![],
+			event_hub: crate::event::EventHub::default(),
+		};
+		let xml = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
+		assert!(xml.contains("DLNA.ORG_PN=AVC_MP4_HP_HD_AAC"), "{xml}");
+		assert!(xml.contains(r#"resolution="1920x1080""#), "{xml}");
+		assert!(xml.contains(r#"duration="0:01:00.000""#), "{xml}");
 	}
 }

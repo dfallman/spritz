@@ -56,6 +56,8 @@ pub async fn start_server(
 		let mut media_sizes = Vec::with_capacity(media_files.len());
 		let mut media_dates = Vec::with_capacity(media_files.len());
 		let mut media_durations = Vec::with_capacity(media_files.len());
+		let mut media_resolutions = Vec::with_capacity(media_files.len());
+		let mut media_pns = Vec::with_capacity(media_files.len());
 		let mut media_has_art = Vec::with_capacity(media_files.len());
 		for p in &media_files {
 			match std::fs::metadata(p) {
@@ -72,10 +74,18 @@ pub async fn start_server(
 					media_dates.push("2000-01-01".into());
 				}
 			}
+			let info = spritz_core::probe_media(p);
+			let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
 			media_durations.push(
-				spritz_core::probe_duration(p)
+				info.duration
 					.map(spritz_core::format_dlna_duration)
 					.unwrap_or_default(),
+			);
+			media_resolutions.push(info.resolution_attr().unwrap_or_default());
+			media_pns.push(
+				spritz_core::dlna_org_pn_for(ext, &info)
+					.unwrap_or("")
+					.to_string(),
 			);
 			media_has_art.push(
 				spritz_core::album_art_sidecar(p).is_some() || spritz_core::has_embedded_art(p),
@@ -100,6 +110,8 @@ pub async fn start_server(
 			media_sizes,
 			media_dates,
 			media_durations,
+			media_resolutions,
+			media_pns,
 			media_has_art,
 			folder_nodes,
 			video_idx,
@@ -113,6 +125,8 @@ pub async fn start_server(
 		media_sizes,
 		media_dates,
 		media_durations,
+		media_resolutions,
+		media_pns,
 		media_has_art,
 		folder_nodes,
 		video_idx,
@@ -137,6 +151,8 @@ pub async fn start_server(
 		media_sizes,
 		media_dates,
 		media_durations,
+		media_resolutions,
+		media_pns,
 		media_has_art,
 		video_idx,
 		audio_idx,

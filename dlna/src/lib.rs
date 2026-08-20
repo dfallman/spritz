@@ -41,6 +41,10 @@ pub struct DlnaConfig {
 	pub media_dates: Vec<String>,
 	/// DIDL duration (`H:MM:SS.mmm`); empty when unknown.
 	pub media_durations: Vec<String>,
+	/// DIDL `resolution` (`1920x1080`); empty when unknown.
+	pub media_resolutions: Vec<String>,
+	/// `DLNA.ORG_PN` value; empty when omitted (unknown or non-DLNA codec).
+	pub media_pns: Vec<String>,
 	/// True when a sidecar or embedded cover exists for `/art/{i}`.
 	pub media_has_art: Vec<bool>,
 	/// Indices into `media_files` for video items (flat Videos container).
