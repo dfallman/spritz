@@ -250,6 +250,8 @@ mod tests {
 				audio_idx: vec![],
 				folder_nodes: vec![],
 				media_durations: vec![],
+				media_resolutions: vec![],
+				media_pns: vec![],
 				media_has_art: vec![],
 				event_hub: crate::event::EventHub::default(),
 			},

@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 48×48 PNG device icon at `GET /upnp/icon.png`
 - Sidecar subtitles (`.srt` / `.vtt` / `.ass`) served over HTTP and advertised as extra DIDL `<res>` tags
 - Access log (`info`) for `/m/`, `/upnp/`, and `/art/` requests
-- DIDL `duration` and `DLNA.ORG_PN` from file headers (MP4/MKV/WAV/FLAC) plus sidecar album art
+- DIDL `duration` and codec-accurate `DLNA.ORG_PN` from file headers (MP4/MKV/WAV/FLAC), plus `resolution=` when width/height are known. HEVC/VP9/AV1 omit the PN rather than claiming H.264. Sidecar album art.
 - UPnP event `NOTIFY` after `SUBSCRIBE` (ContentDirectory, ConnectionManager, MediaReceiverRegistrar)
 - Xbox `X_MS_MediaReceiverRegistrar` service (`IsAuthorized` / `IsValidated` always succeed)
 - IPv6 SSDP (`[FF02::C]:1900`) and dual-stack HTTP when `--bind` is unspecified
