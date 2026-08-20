@@ -13,6 +13,14 @@ struct Cli {
 	/// Port to listen on
 	#[arg(short, long, default_value_t = 8080)]
 	port: u16,
+
+	/// Address to bind (a specific interface IP on multi-homed hosts)
+	#[arg(long, default_value = "0.0.0.0")]
+	bind: std::net::IpAddr,
+
+	/// Friendly name shown to DLNA clients
+	#[arg(short, long, default_value = "Spritz Media Server")]
+	name: String,
 }
 
 #[tokio::main]
@@ -39,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 		}
 	}
 
-	if let Err(e) = api::start_server(cli.port, folders).await {
+	if let Err(e) = api::start_server(cli.port, cli.bind, &cli.name, folders).await {
 		tracing::error!("Server error: {e}");
 		std::process::exit(1);
 	}
