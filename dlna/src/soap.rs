@@ -10,15 +10,31 @@ pub fn parse_action(header_value: &str) -> String {
 }
 
 /// Extract the text content of the first <LocalName> or <ns:LocalName> element.
+/// The opening tag may carry attributes (`<ObjectID xmlns="...">`).
 pub fn extract_tag_value(xml: &str, local_name: &str) -> Option<String> {
-	find_content(xml, &format!("<{local_name}>"))
-		.or_else(|| find_content(xml, &format!(":{local_name}>")))
+	content_after_open(xml, &format!("<{local_name}"))
+		.or_else(|| content_after_open(xml, &format!(":{local_name}")))
 }
 
-fn find_content(xml: &str, open_suffix: &str) -> Option<String> {
-	let start = xml.find(open_suffix)? + open_suffix.len();
-	let end = xml[start..].find('<')? + start;
-	Some(xml[start..end].trim().to_string())
+fn content_after_open(xml: &str, needle: &str) -> Option<String> {
+	let mut search_from = 0;
+	while let Some(rel) = xml[search_from..].find(needle) {
+		let after_name = search_from + rel + needle.len();
+		let rest = xml.get(after_name..)?;
+		let first = rest.as_bytes().first().copied();
+		if !matches!(
+			first,
+			Some(b'>') | Some(b'/') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+		) {
+			search_from = after_name;
+			continue;
+		}
+		let gt = rest.find('>')?;
+		let content = xml.get(after_name + gt + 1..)?;
+		let end = content.find('<')?;
+		return Some(content[..end].trim().to_string());
+	}
+	None
 }
 
 pub fn response(action: &str, service_type: &str, inner: &str) -> String {
@@ -67,7 +83,53 @@ fn build(status: u16, body: String) -> Response {
 		.status(status)
 		.header("content-type", "text/xml; charset=\"utf-8\"")
 		.header("ext", "")
-		.header("server", "Linux/5.0 UPnP/1.0 Spritz/0.1")
+		.header("server", crate::SERVER)
 		.body(Body::from(body))
 		.unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn parse_action_reads_the_name_after_the_hash() {
+		assert_eq!(
+			parse_action(r#""urn:schemas-upnp-org:service:ContentDirectory:1#Browse""#),
+			"Browse"
+		);
+		assert_eq!(
+			parse_action("urn:schemas-upnp-org:service:ContentDirectory:1#GetSystemUpdateID"),
+			"GetSystemUpdateID"
+		);
+	}
+
+	#[test]
+	fn extract_tag_value_reads_plain_and_namespaced_tags() {
+		assert_eq!(
+			extract_tag_value("<ObjectID>V</ObjectID>", "ObjectID").as_deref(),
+			Some("V")
+		);
+		assert_eq!(
+			extract_tag_value("<u:ObjectID>A</u:ObjectID>", "ObjectID").as_deref(),
+			Some("A")
+		);
+	}
+
+	#[test]
+	fn extract_tag_value_reads_tags_with_attributes() {
+		assert_eq!(
+			extract_tag_value(
+				r#"<ObjectID xmlns="urn:schemas-upnp-org:service:ContentDirectory:1">f:2</ObjectID>"#,
+				"ObjectID"
+			)
+			.as_deref(),
+			Some("f:2")
+		);
+		assert_eq!(
+			extract_tag_value("<u:ObjectID xmlns:u=\"urn:x\">m:1</u:ObjectID>", "ObjectID")
+				.as_deref(),
+			Some("m:1")
+		);
+	}
 }

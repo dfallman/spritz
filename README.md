@@ -30,7 +30,9 @@ DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Ko
 - Serves one or more folders (recursively — subdirectories are indexed automatically) from a single instance
 - Presents three browse views at the root: `Videos`, `Music`, and `By folder` (the on-disk structure)
 - Supports video and audio formats (MP4/MKV/AVI/MOV/… and MP3/FLAC/OGG/…)
-- Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse
+- Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse and Search
+- Advertises sidecar subtitles (`.srt` / `.vtt` / `.ass`) next to matching media files
+- Advertises duration, DLNA profile names, and sidecar album art (`cover.jpg` / matching stem)
 - Exposes an M3U playlist at `/spritz` for VLC, Infuse, and similar players
 - Sends `ssdp:byebye` on Ctrl+C so clients drop it immediately
 
@@ -80,6 +82,8 @@ Arguments:
 
 Options:
   -p, --port <PORT>  Port to listen on [default: 8080]
+      --bind <ADDR>  Address to bind [default: 0.0.0.0]
+  -n, --name <NAME>  Friendly name shown to DLNA clients [default: Spritz Media Server]
   -h, --help         Print help
 ```
 
@@ -97,6 +101,9 @@ spritz /mnt/nas/movies /mnt/nas/tv /mnt/nas/kids
 
 # Use a different port
 spritz --port 9000 /media/videos
+
+# Bind a specific interface and set the name TVs display
+spritz --bind 192.168.1.10 --name "Living Room" /media/videos
 ```
 
 ## Connecting a client
@@ -142,21 +149,34 @@ Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 | `.wma`                  | `audio/x-ms-wma`|
 | `.aiff`, `.aif`         | `audio/aiff`    |
 
+**Subtitles** (sidecar files next to a video/audio item; not listed as their own library entries)
+
+| Extension      | MIME type     |
+|----------------|---------------|
+| `.srt`         | `text/srt`    |
+| `.vtt`         | `text/vtt`    |
+| `.ass`, `.ssa` | `text/x-ssa`  |
+
 ## Compatibility
 
 | Device                                | Status | Notes                                                              |
 |---------------------------------------|--------|--------------------------------------------------------------------|
 | Samsung (Tizen)                       | Works  | Requires `<dc:date>` on each DIDL item — included                  |
-| LG (webOS)                            | Works  | Shows an "unknown device" icon (no icon endpoint yet)              |
+| LG (webOS)                            | Works  | Device icon served at `/upnp/icon.png`                             |
 | Sony / Bravia                         | Works  | Strict about `Content-Type: text/xml; charset="utf-8"` — handled   |
 | Apple TV — Infuse (tvOS, iOS, iPadOS) | Works  | Requires the full DIDL treatment for tvOS playback                 |
 | Apple TV — VLC (tvOS, iOS, iPadOS)    | Works  | tvOS VLC sometimes misses SSDP; add the M3U URL manually           |
+| Xbox                                  | Works  | Advertises Microsoft `MediaReceiverRegistrar`                      |
 
 ## Troubleshooting
 
 DLNA is fiddly by nature, especially in combination with certain devices and operating systems (looking at you, Apple TV).
 
 If your client can't find Spritz, check your firewall rules first (on both the server and client side, but typically the server side): SSDP needs UDP 1900 open, and HTTP needs your serving port (8080 by default).
+
+On a VPN, Docker, or multi-homed machine, discovery may succeed while playback URLs point at the wrong address. Infuse and VLC using the M3U URL (`/spritz`) pick up the `Host` header; SSDP `LOCATION` tries to reply with the interface on the same subnet as the client.
+
+IPv6-only LANs: SSDP also joins `[FF02::C]:1900`. When `--bind` is the default unspecified address, HTTP tries a dual-stack socket so IPv6 clients can fetch `LOCATION`. Link-local (`fe80::`) addresses are not advertised.
 
 On Apple TV, Infuse tends to work better than VLC. If you're using VLC and can't find the share, you can bypass discovery entirely by pasting the M3U URL into VLC: `Media → Open Network Stream → http://192.168.X.X:8080/spritz`. If that plays, the server is fine and the issue is discovery.
 
@@ -186,10 +206,10 @@ New-NetFirewallRule -DisplayName "Spritz SSDP" `
 
 Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library. At a glance:
 
-- **Discovery (SSDP).** Sends `ssdp:alive` on startup, responds to `M-SEARCH`, and sends `ssdp:byebye` on exit.
-- **Device description.** `GET /upnp/description.xml` returns a `MediaServer:1` description advertising ContentDirectory and ConnectionManager.
-- **Browse (SOAP).** `POST /upnp/control/contentdirectory` handles `Browse` and related actions, exposing three root containers: Videos (flat), Music (flat), and By folder (recursive).
-- **File serving.** Each source directory is mounted at `/m/{index}/` and served over HTTP with range support.
+- **Discovery (SSDP).** Sends `ssdp:alive` on IPv4 and IPv6 on startup, responds to `M-SEARCH`, and sends `ssdp:byebye` on exit.
+- **Device description.** `GET /upnp/description.xml` returns a `MediaServer:1` description advertising ContentDirectory, ConnectionManager, and Xbox MediaReceiverRegistrar.
+- **Browse / Search (SOAP).** `POST /upnp/control/contentdirectory` handles `Browse`, `Search`, and related actions, exposing three root containers: Videos (flat), Music (flat), and By folder (recursive).
+- **File serving.** Each source directory is mounted at `/m/{index}/` and served over HTTP with range support. Only media, sidecar-subtitle, and album-art extensions are reachable; directory listings, other files, and symlinks are not.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full protocol walkthrough.
 
