@@ -6,22 +6,26 @@
 
 `spritz` is a terminal-based, nano DLNA media server. Run it in a folder, and that folder's video and audio files become available to any TVs, phones, speakers, and other media players on your local network using the DLNA protocol.
 
-<img width="1684" height="1148" alt="spritz-github" src="https://github.com/user-attachments/assets/32228ce0-14c6-4a5a-9222-95802132ec17" />
+<img width="800" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
 
 ### Quick start
+Install:
+```bash
+brew install dfallman/tap/spritz
+```
+
+Navigate to the folder your media files are in and start Spritz:
 ```
 cd /mnt/nas/movies
 spritz
 ```
 
-...or, alternatively, run it from anywhere and specify which path(s) to serve up:
-
+...alternatively, run it from anywhere and specify which path(s) to serve up:
 ```
 spritz /mnt/nas/movies /mnt/nas/music
 ```
 
-DLNA clients — such as modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more — should see the spritz share appear in their network sources within a few seconds, as long as your client supports DLNA.
-
+DLNA clients (including most modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox, Kodi, tablets, phones, and many more) should now see the Spritz share appear in their network sources within a few seconds. 
 
 ## Features
 
