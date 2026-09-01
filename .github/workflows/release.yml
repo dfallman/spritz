@@ -114,3 +114,76 @@ jobs:
           set -euo pipefail
           archive="spritz-${{ matrix.target }}.${{ matrix.archive }}"
           gh release upload "${{ inputs.tag }}" "$archive" "$archive.sha256" --clobber
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Regenerate formula and push to dfallman/homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Fine-grained PAT with contents:write on dfallman/homebrew-tap.
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN secret not set; skipping tap update."
+            exit 0
+          fi
+          tag="${{ inputs.tag }}"
+          version="${tag#v}"
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'spritz-*.tar.xz.sha256' --dir shas
+          sha() { cut -d' ' -f1 "shas/spritz-$1.tar.xz.sha256"; }
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/dfallman/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cat > tap/Formula/spritz.rb << EOF
+          # typed: false
+          # frozen_string_literal: true
+
+          # This formula is regenerated automatically by the release workflow in
+          # dfallman/spritz (.github/workflows/release.yml) on every tagged release.
+          class Spritz < Formula
+            desc "Nano DLNA media server — run in any folder to share it on the LAN"
+            homepage "https://github.com/dfallman/spritz"
+            version "${version}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/dfallman/spritz/releases/download/${tag}/spritz-aarch64-apple-darwin.tar.xz"
+                sha256 "$(sha aarch64-apple-darwin)"
+              else
+                url "https://github.com/dfallman/spritz/releases/download/${tag}/spritz-x86_64-apple-darwin.tar.xz"
+                sha256 "$(sha x86_64-apple-darwin)"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/dfallman/spritz/releases/download/${tag}/spritz-aarch64-unknown-linux-gnu.tar.xz"
+                sha256 "$(sha aarch64-unknown-linux-gnu)"
+              else
+                url "https://github.com/dfallman/spritz/releases/download/${tag}/spritz-x86_64-unknown-linux-gnu.tar.xz"
+                sha256 "$(sha x86_64-unknown-linux-gnu)"
+              end
+            end
+
+            def install
+              bin.install "spritz"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/spritz --version")
+            end
+          end
+          EOF
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/spritz.rb
+          git diff --cached --quiet && { echo "Formula unchanged."; exit 0; }
+          git commit -m "spritz ${tag}"
+          git push

@@ -48,6 +48,12 @@ While Spritz is primarily meant as a means for serving up folders ad hoc, that i
 
 ## Install
 
+### Homebrew (macOS and Linux)
+
+```bash
+brew install dfallman/tap/spritz
+```
+
 ### Pre-built binaries
 
 Download the latest archive for your platform from the [Releases](https://github.com/dfallman/spritz/releases) page. Builds are provided for:
