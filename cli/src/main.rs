@@ -4,6 +4,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "spritz")]
+#[command(version)]
 #[command(about = "Nano DLNA media server — run in any folder to share it on the network")]
 struct Cli {
 	/// Folders to serve (defaults to current directory)
