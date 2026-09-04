@@ -4,9 +4,9 @@
 [![release](https://img.shields.io/github/v/release/dfallman/spritz)](https://github.com/dfallman/spritz/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-`spritz` is a terminal-based, nano DLNA media server. Zero fuzz, zero configuration. 
+Spritz is a nano DLNA media server for the terminal. No setup, no config.
 
-Run it in a folder, and that folder's video and audio files become available to TVs, phones, speakers, and other media players on your local network using the DLNA protocol.
+Run it in a folder, and the video and audio files there show up on the TVs, phones, and speakers on your local network.
 
 <img width="800" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
 
@@ -227,13 +227,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full protocol walkthrough.
 
 ## Note on AI use
 
-The author of this application has been writing code for over 30 years. Lately, LLM agent-enhanced coding practices have rekindled my sense of awe at what's possible. This project has been built using a range of tools, with Anthropic's Claude Code (using Opus 4.7) among them.
-
-Unlike some who dismiss anything touched by a coding agent as "slop," I don't see it that way. To me, these tools are a way to move much faster, explore many more ideas, and test those ideas and implementations more rigorously than I ever could on my own.
+I've been writing code for over 30 years, and lately LLM agent-assisted coding has rekindled my sense of awe at what's possible. This project was built in Rust using a range of tools, including Anthropic's Claude Code. For me, these tools are simply means to move faster, explore more ideas, and test those ideas and implementations more rigorously than I could on my own.
 
 ## Contributing
 
-Issues and pull requests welcome. For bugs, please include your client device/OS, firewall setup, and the output of `spritz` when the client tries to connect.
+Issues and pull requests welcome. For bugs, please include your client device/OS, firewall setup, and the terminal output of `spritz` when the client tries to connect.
 
 ## License
 
