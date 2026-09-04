@@ -95,16 +95,17 @@ cargo install --path cli
 # Usage
 
 ```
-spritz [FOLDERS]... [OPTIONS]
+Usage: spritz [OPTIONS] [FOLDER]...
 
 Arguments:
-  [FOLDERS]...  Folders to serve (defaults to the current directory)
+  [FOLDER]...  Folders to serve (defaults to current directory)
 
 Options:
   -p, --port <PORT>  Port to listen on [default: 8080]
-      --bind <ADDR>  Address to bind [default: 0.0.0.0]
-  -n, --name <NAME>  Friendly name shown to DLNA clients [default: Spritz Media Server]
+      --bind <BIND>  Address to bind (a specific interface IP on multi-homed hosts) [default: 0.0.0.0]
+  -n, --name <NAME>  Friendly name shown to DLNA clients [default: "Spritz Media Server"]
   -h, --help         Print help
+  -V, --version      Print version
 ```
 
 ## Examples
