@@ -6,7 +6,7 @@
 
 Spritz is a nano DLNA media server for the terminal. No setup, no config.
 
-Run it in a folder, and the video and audio files there show up on the TVs, phones, and speakers on your local network.
+Run it in a folder, and its video and audio files show up on the TVs, phones, and speakers on your local network.
 
 <img width="800" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
 
