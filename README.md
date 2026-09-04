@@ -46,7 +46,14 @@ DLNA clients (including most modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox
 
 Most DLNA and media servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running.
 
-Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. As we say in Australia, "no dramas": there are no config files, no database, no indexing and reindexing jobs, and no background services.
+Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. No config files, no database, no indexing and reindexing jobs, and no background services. As we say in Australia, "no dramas".
+
+A typical use case for spritz is that you've just downloaded something you want to watch right away, for instance a football game. To make that game available with Spritz, just:
+
+```
+cd Downloads
+spritz
+```
 
 While Spritz is primarily meant as a means for serving up folders ad hoc, that is folders you don't serve every day, it _can_ also be used as a no-nonsense alternative to the heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder too and spritz will do its thing.
 
