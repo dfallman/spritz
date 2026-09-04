@@ -109,7 +109,7 @@ spritz
 spritz /mnt/nas/movies
 
 # Serve multiple folders
-spritz /mnt/nas/movies /mnt/nas/tv /mnt/nas/kids
+spritz /mnt/nas/movies /mnt/nas/tv /mnt/nas/music
 
 # Use a different port
 spritz --port 9000 /media/videos
