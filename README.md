@@ -55,9 +55,11 @@ cd Downloads
 spritz
 ```
 
-While Spritz is primarily meant as a means for serving up folders ad hoc, that is folders you don't serve every day, it _can_ also be used as a no-nonsense alternative to the heavier, more complex media file servers mentioned above. You can just leave it running on your NAS's `Media` folder too and spritz will do its thing.
+So Spritz isn't a replacement for other media servers; it sits alongside them. 
 
-**Note**: If you leave it running, note that Spritz parses the file tree at startup, but it doesn't monitor it for changes. Hence, if you add a file to a share, just restart Spritz. Alternatively, if you want to be fancy pants, try using something like [watchexec](https://github.com/watchexec/watchexec): `watchexec -r -- spritz` 
+Spritz is built for ad hoc sharing, as in folders you don't serve every day. But it also works as a no-nonsense alternative to the heavier servers above. Point it at your NAS's media folder, leave it running, and it does its thing.
+
+**Note:** Spritz reads the file tree at startup and doesn't watch it for changes. If you add files to a share, restart Spritz. Or let watchexec do it for you: `watchexec -r -- spritz`
 
 ## Install
 
