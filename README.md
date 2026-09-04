@@ -33,16 +33,16 @@ DLNA clients (including most modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox
 
 - Runs from a single command, `spritz` — zero config, zero state
 - Announces itself via SSDP/UPnP, so clients find it without typing an IP
-- Serves one or more folders (recursively — subdirectories are indexed automatically) from a single instance
+- Serves one or more folders (recursively, subdirectories are indexed automatically) from a single instance
 - Presents three browse views at the root: `Videos`, `Music`, and `By folder` (the on-disk structure)
-- Supports video and audio formats (MP4/MKV/AVI/MOV/… and MP3/FLAC/OGG/…)
+- Supports video and audio formats (MP4/MKV/AVI/MOV/... and MP3/FLAC/OGG/...)
 - Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse and Search
 - Advertises sidecar subtitles (`.srt` / `.vtt` / `.ass`) next to matching media files
 - Advertises duration, resolution, honest DLNA profile names (from the file, not the extension), and sidecar album art (`cover.jpg` / matching stem)
 - Exposes an M3U playlist at `/spritz` for VLC, Infuse, and similar players
 - Sends `ssdp:byebye` on Ctrl+C so clients drop it immediately
 
-## Why Spritz?
+# Why Spritz?
 
 Most DLNA and media servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running.
 
@@ -61,15 +61,14 @@ Spritz is built for ad hoc sharing, as in folders you don't serve every day. But
 
 **Note:** Spritz reads the file tree at startup and doesn't watch it for changes. If you add files to a share, restart Spritz. Or let watchexec do it for you: `watchexec -r -- spritz`
 
-## Install
+# Install
 
-### Homebrew (macOS and Linux)
-
+## Homebrew (recommended for macOS and Linux) 
 ```bash
 brew install dfallman/tap/spritz
 ```
 
-### Pre-built binaries
+## Pre-built binaries
 
 Download the latest archive for your platform from the [Releases](https://github.com/dfallman/spritz/releases) page. Builds are provided for:
 
@@ -79,7 +78,7 @@ Download the latest archive for your platform from the [Releases](https://github
 
 Each archive ships with a `.sha256` checksum.
 
-### From source
+## From source
 
 To compile Spritz from source, you'll need Rust. Use [rustup](https://rustup.rs/) for the installation:
 ```
@@ -93,7 +92,7 @@ cd spritz
 cargo install --path cli
 ```
 
-## Usage
+# Usage
 
 ```
 spritz [FOLDERS]... [OPTIONS]
@@ -108,7 +107,7 @@ Options:
   -h, --help         Print help
 ```
 
-### Examples
+## Examples
 
 ```bash
 # Serve the current directory
@@ -127,18 +126,18 @@ spritz --port 9000 /media/videos
 spritz --bind 192.168.1.10 --name "Living Room" /media/videos
 ```
 
-## Connecting a client
+# Connecting a client
 
-### Smart TVs, game consoles, or media players (DLNA)
+## Smart TVs, game consoles, or media players (DLNA)
 Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside, you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
 
-### VLC
+## VLC
 `Media → Open Network Stream → http://<your-spritz-server-ip>:8080/spritz`, or browse via `View → Playlist → Local Network → Universal Plug and Play`. VLC only scans at startup and when it receives a NOTIFY packet, so if it doesn't appear, restart VLC once Spritz is already running.
 
-### Infuse (Apple TV / iOS / iPadOS)
+## Infuse (Apple TV / iOS / iPadOS)
 `Add Files → Network Share` and pick Spritz Media Server from the list, or enter the M3U URL manually. Works on tvOS as well — the share browses the three-container layout described above.
 
-### Any M3U-capable player
+## Any M3U-capable player
 Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 
 **Note**: `<your-spritz-server-ip>` is the IP address of the machine you run spritz on, that's the "server" here — the "client" (see above) is the device from which you play your content. To find your server's IP, use `ipconfig` in the Windows Command Prompt. On macOS, check `System Settings → Network` (or use `ipconfig getifaddr en0` in a terminal). On linux, run `ip addr` or `hostname -I`.
@@ -189,7 +188,7 @@ Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 | Apple TV — VLC (tvOS, iOS, iPadOS)    | Works  | tvOS VLC sometimes misses SSDP; add the M3U URL manually           |
 | Xbox                                  | Works  | Advertises Microsoft `MediaReceiverRegistrar`                      |
 
-## Troubleshooting
+# Troubleshooting
 
 DLNA is fiddly by nature, especially in combination with certain devices and operating systems (looking at you, Apple TV).
 
@@ -201,9 +200,9 @@ IPv6-only LANs: SSDP also joins `[FF02::C]:1900`. When `--bind` is the default u
 
 On Apple TV, Infuse tends to work better than VLC. If you're using VLC and can't find the share, you can bypass discovery entirely by pasting the M3U URL into VLC: `Media → Open Network Stream → http://192.168.X.X:8080/spritz`. If that plays, the server is fine and the issue is discovery.
 
-Restart VLC once Spritz is already running — VLC only scans at startup and on NOTIFY packets.
+Restart VLC once Spritz is already running as VLC only scans at startup and on NOTIFY packets.
 
-### Windows / WSL2
+## Windows / WSL2
 
 Spritz works under WSL2 with mirrored networking. Add this to your `~/.wslconfig`:
 
@@ -221,9 +220,9 @@ New-NetFirewallRule -DisplayName "Spritz SSDP" `
   -Direction Inbound -Protocol UDP -LocalPort 1900 -Action Allow
 ```
 
-> **Known issue:** SSDP multicast sometimes requires elevated privileges under WSL2. If devices don't auto-discover the server, try `sudo spritz` or grant the binary `CAP_NET_RAW`. HTTP file serving and the M3U endpoint work either way.
+**Known issue:** SSDP multicast sometimes requires elevated privileges under WSL2. If devices don't auto-discover the server, you could try granting the binary `CAP_NET_RAW` or (as a last resort) `sudo spritz`. HTTP file serving and the M3U endpoint work either way.
 
-## Architecture
+# Architecture
 
 Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library. At a glance:
 
