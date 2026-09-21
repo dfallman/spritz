@@ -130,11 +130,41 @@ fn spawn_alive(
 	})
 }
 
+/// macOS and the BSDs only let two processes share a UDP port when every
+/// socket sets `SO_REUSEPORT`. VLC and other UPnP stacks bind 1900 that way,
+/// so without it our bind fails with `EADDRINUSE` whenever they are running.
+/// `SO_REUSEADDR` alone is enough on Linux, where `SO_REUSEPORT` would also
+/// load-balance unicast datagrams between the sockets.
+#[cfg(any(
+	target_os = "macos",
+	target_os = "ios",
+	target_os = "freebsd",
+	target_os = "netbsd",
+	target_os = "openbsd",
+	target_os = "dragonfly"
+))]
+fn set_reuse_port(socket: &socket2::Socket) -> std::io::Result<()> {
+	socket.set_reuse_port(true)
+}
+
+#[cfg(not(any(
+	target_os = "macos",
+	target_os = "ios",
+	target_os = "freebsd",
+	target_os = "netbsd",
+	target_os = "openbsd",
+	target_os = "dragonfly"
+)))]
+fn set_reuse_port(_socket: &socket2::Socket) -> std::io::Result<()> {
+	Ok(())
+}
+
 fn create_socket(local_ip: Ipv4Addr) -> anyhow::Result<UdpSocket> {
 	use socket2::{Domain, Protocol, Socket, Type};
 
 	let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
 	socket.set_reuse_address(true)?;
+	set_reuse_port(&socket)?;
 	socket.set_nonblocking(true)?;
 
 	let bind_addr = socket2::SockAddr::from(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 1900u16)));
@@ -164,6 +194,7 @@ fn create_socket_v6() -> anyhow::Result<UdpSocket> {
 
 	let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
 	socket.set_reuse_address(true)?;
+	set_reuse_port(&socket)?;
 	socket.set_only_v6(true)?;
 	socket.set_nonblocking(true)?;
 
@@ -479,6 +510,36 @@ fn header_value(msg: &str, name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// VLC (libupnp) binds UDP 1900 with SO_REUSEPORT. On macOS we must do the
+	/// same or our bind fails with EADDRINUSE and discovery silently dies.
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn ssdp_sockets_share_port_1900_with_another_reuseport_listener() {
+		use socket2::{Domain, Protocol, Socket, Type};
+
+		let other = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+		other.set_reuse_address(true).unwrap();
+		other.set_reuse_port(true).unwrap();
+		other
+			.bind(&SocketAddr::from((Ipv4Addr::UNSPECIFIED, 1900u16)).into())
+			.unwrap();
+		let other6 = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).unwrap();
+		other6.set_reuse_address(true).unwrap();
+		other6.set_reuse_port(true).unwrap();
+		other6.set_only_v6(true).unwrap();
+		other6
+			.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 1900u16)).into())
+			.unwrap();
+
+		// tokio's UdpSocket::from_std needs a reactor.
+		let rt = tokio::runtime::Runtime::new().unwrap();
+		let _guard = rt.enter();
+		let ours = create_socket(first_ipv4().unwrap_or(Ipv4Addr::LOCALHOST));
+		assert!(ours.is_ok(), "IPv4 bind failed: {:?}", ours.err());
+		let ours6 = create_socket_v6();
+		assert!(ours6.is_ok(), "IPv6 bind failed: {:?}", ours6.err());
+	}
 
 	const UUID: &str = "11111111-2222-3333-4444-555555555555";
 
