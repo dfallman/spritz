@@ -146,8 +146,12 @@ pub fn probe_media(path: &Path) -> MediaInfo {
 		.unwrap_or("")
 		.to_ascii_lowercase();
 	match ext.as_str() {
-		"mp4" | "m4v" | "m4a" | "mov" => read_probe(path, mp4_info_from_bytes),
-		"mkv" | "webm" => read_probe(path, mkv_info_from_bytes),
+		"mp4" | "m4v" | "m4a" | "mov" => std::fs::File::open(path)
+			.and_then(|mut f| mp4_info_from_reader(&mut f))
+			.unwrap_or_default(),
+		"mkv" | "webm" => std::fs::File::open(path)
+			.map(|f| mkv_info_from_bytes(&read_prefix(f, MKV_PROBE_BYTES)))
+			.unwrap_or_default(),
 		"wav" => MediaInfo {
 			duration: duration_from_wav(path).ok().flatten(),
 			audio_codec: Some(AudioCodec::Pcm),
@@ -162,12 +166,59 @@ pub fn probe_media(path: &Path) -> MediaInfo {
 	}
 }
 
-fn read_probe(path: &Path, parse: fn(&[u8]) -> MediaInfo) -> MediaInfo {
+/// `mkv_info_from_bytes` only inspects the first 256 KiB, so never read more.
+const MKV_PROBE_BYTES: u64 = 256 * 1024;
+
+/// Largest `moov` we are willing to load. Real ones are a few MiB at most;
+/// anything bigger is a corrupt header and not worth the memory.
+const MP4_MAX_MOOV_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Read at most `limit` bytes. Short reads (EOF) are fine.
+fn read_prefix<R: Read>(reader: R, limit: u64) -> Vec<u8> {
 	let mut data = Vec::new();
-	match std::fs::File::open(path).and_then(|mut f| f.read_to_end(&mut data)) {
-		Ok(_) => parse(&data),
-		Err(_) => MediaInfo::default(),
+	let _ = reader.take(limit).read_to_end(&mut data);
+	data
+}
+
+/// Walk the top-level boxes with seeks and load only `moov`, which holds
+/// every header we parse. `mdat` (nearly the whole file) is skipped, so
+/// probing a multi-gigabyte video costs a handful of small reads whether the
+/// file is "fast start" (moov first) or not (moov last).
+pub(crate) fn mp4_info_from_reader<R: Read + Seek>(reader: &mut R) -> std::io::Result<MediaInfo> {
+	let len = reader.seek(SeekFrom::End(0))?;
+	let mut pos = 0u64;
+	while pos + 8 <= len {
+		reader.seek(SeekFrom::Start(pos))?;
+		let mut hdr = [0u8; 8];
+		reader.read_exact(&mut hdr)?;
+		let size32 = u64::from(u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]));
+		let kind = &hdr[4..8];
+		let (hdr_len, box_size) = match size32 {
+			1 => {
+				let mut large = [0u8; 8];
+				reader.read_exact(&mut large)?;
+				(16u64, u64::from_be_bytes(large))
+			}
+			0 => (8u64, len - pos),
+			s => (8u64, s),
+		};
+		if box_size < hdr_len {
+			break;
+		}
+		if kind == b"moov" {
+			if box_size > MP4_MAX_MOOV_BYTES {
+				break;
+			}
+			reader.seek(SeekFrom::Start(pos))?;
+			let buf = read_prefix(reader.by_ref(), box_size);
+			return Ok(mp4_info_from_bytes(&buf));
+		}
+		if size32 == 0 {
+			break;
+		}
+		pos = pos.saturating_add(box_size);
 	}
+	Ok(MediaInfo::default())
 }
 
 pub fn probe_duration(path: &Path) -> Option<Duration> {
@@ -784,6 +835,94 @@ mod tests {
 		v.extend(kind);
 		v.extend(payload);
 		v
+	}
+
+	/// Counts bytes actually read so tests can prove the probe is bounded.
+	struct CountingReader<R> {
+		inner: R,
+		read: u64,
+	}
+
+	impl<R: Read> Read for CountingReader<R> {
+		fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+			let n = self.inner.read(buf)?;
+			self.read += n as u64;
+			Ok(n)
+		}
+	}
+
+	impl<R: Seek> Seek for CountingReader<R> {
+		fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+			self.inner.seek(pos)
+		}
+	}
+
+	fn mvhd_2500ms() -> Vec<u8> {
+		let mut mvhd = vec![0u8; 24];
+		mvhd[12..16].copy_from_slice(&1000u32.to_be_bytes());
+		mvhd[16..20].copy_from_slice(&2500u32.to_be_bytes());
+		box_bytes(b"moov", &box_bytes(b"mvhd", &mvhd))
+	}
+
+	#[test]
+	fn mp4_probe_skips_mdat_when_moov_is_last() {
+		let mut file = box_bytes(b"ftyp", b"isom");
+		file.extend(box_bytes(b"mdat", &vec![0u8; 1024 * 1024]));
+		file.extend(mvhd_2500ms());
+		let mut r = CountingReader {
+			inner: std::io::Cursor::new(file),
+			read: 0,
+		};
+		let info = mp4_info_from_reader(&mut r).unwrap();
+		assert_eq!(info.duration, Some(Duration::from_millis(2500)));
+		assert!(r.read < 4096, "read {} bytes; mdat must be skipped", r.read);
+	}
+
+	#[test]
+	fn mp4_probe_stops_after_moov_when_moov_is_first() {
+		let mut file = box_bytes(b"ftyp", b"isom");
+		file.extend(mvhd_2500ms());
+		file.extend(box_bytes(b"mdat", &vec![0u8; 1024 * 1024]));
+		let mut r = CountingReader {
+			inner: std::io::Cursor::new(file),
+			read: 0,
+		};
+		let info = mp4_info_from_reader(&mut r).unwrap();
+		assert_eq!(info.duration, Some(Duration::from_millis(2500)));
+		assert!(r.read < 4096, "read {} bytes; mdat must be skipped", r.read);
+	}
+
+	#[test]
+	fn mp4_probe_handles_64bit_box_sizes() {
+		let mut file = box_bytes(b"ftyp", b"isom");
+		let payload = vec![0u8; 4096];
+		let mut mdat = 1u32.to_be_bytes().to_vec();
+		mdat.extend(b"mdat");
+		mdat.extend(((16 + payload.len()) as u64).to_be_bytes());
+		mdat.extend(&payload);
+		file.extend(mdat);
+		file.extend(mvhd_2500ms());
+		let mut r = CountingReader {
+			inner: std::io::Cursor::new(file),
+			read: 0,
+		};
+		assert_eq!(
+			mp4_info_from_reader(&mut r).unwrap().duration,
+			Some(Duration::from_millis(2500))
+		);
+		assert!(r.read < 1024, "read {} bytes", r.read);
+	}
+
+	#[test]
+	fn read_prefix_is_bounded() {
+		let data = vec![7u8; 2 * 1024 * 1024];
+		let mut r = CountingReader {
+			inner: std::io::Cursor::new(data),
+			read: 0,
+		};
+		let got = read_prefix(&mut r, MKV_PROBE_BYTES);
+		assert_eq!(got.len() as u64, MKV_PROBE_BYTES);
+		assert_eq!(r.read, MKV_PROBE_BYTES);
 	}
 
 	#[test]
