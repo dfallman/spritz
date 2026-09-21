@@ -22,10 +22,11 @@ use tower_http::services::ServeFile;
 use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
+/// Shared HTTP state for the media, art, and M3U handlers.
 #[derive(Clone)]
-struct AppState {
-	media_dirs: Vec<PathBuf>,
-	media_files: Vec<PathBuf>,
+pub struct AppState {
+	pub media_dirs: Vec<PathBuf>,
+	pub media_files: Vec<PathBuf>,
 }
 
 pub async fn start_server(
@@ -221,7 +222,8 @@ pub async fn start_server(
 	Ok(())
 }
 
-async fn bind_http(bind: IpAddr, port: u16) -> anyhow::Result<tokio::net::TcpListener> {
+/// Bind the HTTP listener. Unspecified `bind` tries dual-stack first.
+pub async fn bind_http(bind: IpAddr, port: u16) -> anyhow::Result<tokio::net::TcpListener> {
 	if bind.is_unspecified() {
 		match bind_dual_stack(port) {
 			Ok(listener) => return Ok(listener),
@@ -246,7 +248,8 @@ fn bind_dual_stack(port: u16) -> anyhow::Result<tokio::net::TcpListener> {
 	Ok(tokio::net::TcpListener::from_std(std_listener)?)
 }
 
-async fn access_log(req: axum::extract::Request, next: Next) -> axum::response::Response {
+/// Access log for `/m/`, `/upnp/`, and `/art/` requests.
+pub async fn access_log(req: axum::extract::Request, next: Next) -> axum::response::Response {
 	let method = req.method().clone();
 	let uri = req.uri().clone();
 	let res = next.run(req).await;
@@ -257,7 +260,8 @@ async fn access_log(req: axum::extract::Request, next: Next) -> axum::response::
 	res
 }
 
-fn advertised_ip(bind: IpAddr, discovered: Option<IpAddr>) -> IpAddr {
+/// The IP advertised in SSDP `LOCATION` and DIDL URLs.
+pub fn advertised_ip(bind: IpAddr, discovered: Option<IpAddr>) -> IpAddr {
 	if !bind.is_unspecified() {
 		bind
 	} else {
@@ -265,10 +269,16 @@ fn advertised_ip(bind: IpAddr, discovered: Option<IpAddr>) -> IpAddr {
 	}
 }
 
+/// `advertised_ip` using the host's primary local address when `bind` is unspecified.
+pub fn discover_advertised_ip(bind: IpAddr) -> IpAddr {
+	advertised_ip(bind, local_ip().ok())
+}
+
 const DEFAULT_FRIENDLY_NAME: &str = "Spritz Media Server";
 const MAX_FRIENDLY_NAME_CHARS: usize = 64;
 
-fn friendly_name(name: &str) -> String {
+/// Trim and cap a friendly name; empty input falls back to the default.
+pub fn friendly_name(name: &str) -> String {
 	let t = name.trim();
 	if t.is_empty() {
 		return DEFAULT_FRIENDLY_NAME.to_string();
@@ -300,7 +310,11 @@ async fn wait_for_shutdown_signal() {
 	}
 }
 
-async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+/// M3U playlist handler for `GET /spritz`.
+pub async fn generate_m3u(
+	headers: HeaderMap,
+	State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
 	let hostname = headers
 		.get(header::HOST)
 		.and_then(|h| h.to_str().ok())
@@ -311,7 +325,8 @@ async fn generate_m3u(headers: HeaderMap, State(state): State<Arc<AppState>>) ->
 	([(header::CONTENT_TYPE, "audio/x-mpegurl")], m3u).into_response()
 }
 
-fn m3u_playlist(files: &[PathBuf], dirs: &[PathBuf], hostname: &str) -> String {
+/// Render an M3U playlist for the given files.
+pub fn m3u_playlist(files: &[PathBuf], dirs: &[PathBuf], hostname: &str) -> String {
 	let mut m3u = String::from("#EXTM3U\n");
 	for file in files {
 		if let Some((i, path)) = media_url_path(file, dirs) {
@@ -323,7 +338,8 @@ fn m3u_playlist(files: &[PathBuf], dirs: &[PathBuf], hostname: &str) -> String {
 	m3u
 }
 
-async fn serve_media(
+/// Media file handler for `GET|HEAD /m/{idx}/{*path}`.
+pub async fn serve_media(
 	axum::extract::Path((idx, tail)): axum::extract::Path<(usize, String)>,
 	State(state): State<Arc<AppState>>,
 	req: axum::http::Request<axum::body::Body>,
@@ -340,7 +356,8 @@ async fn serve_media(
 	}
 }
 
-async fn serve_art(
+/// Album art handler for `GET|HEAD /art/{idx}`.
+pub async fn serve_art(
 	axum::extract::Path(idx): axum::extract::Path<usize>,
 	State(state): State<Arc<AppState>>,
 	req: axum::http::Request<axum::body::Body>,
@@ -360,7 +377,8 @@ async fn serve_art(
 	}
 }
 
-fn stable_device_uuid() -> String {
+/// Stable v5 UUID for this machine so clients see one device across restarts.
+pub fn stable_device_uuid() -> String {
 	uuid_from_identity(&machine_identity())
 }
 
@@ -393,7 +411,7 @@ fn machine_identity() -> String {
 /// (always present, even when empty, so `f:N` indices match source indices).
 /// Subsequent entries are intermediate directories discovered by climbing
 /// from each media file up to its source root.
-fn build_folder_tree(media_dirs: &[PathBuf], media_files: &[PathBuf]) -> Vec<FolderNode> {
+pub fn build_folder_tree(media_dirs: &[PathBuf], media_files: &[PathBuf]) -> Vec<FolderNode> {
 	let mut nodes: Vec<FolderNode> = Vec::with_capacity(media_dirs.len());
 	let mut path_to_idx: HashMap<PathBuf, usize> = HashMap::new();
 
@@ -426,7 +444,8 @@ fn build_folder_tree(media_dirs: &[PathBuf], media_files: &[PathBuf]) -> Vec<Fol
 	nodes
 }
 
-fn sort_folder_tree(nodes: &mut [FolderNode], media_files: &[PathBuf]) {
+/// Sort subfolders and files within each folder node by lowercase name.
+pub fn sort_folder_tree(nodes: &mut [FolderNode], media_files: &[PathBuf]) {
 	for i in 0..nodes.len() {
 		let mut subs = nodes[i].subfolder_indices.clone();
 		subs.sort_by_key(|&j| nodes[j].display_name.to_lowercase());
@@ -521,5 +540,13 @@ mod tests {
 		assert_eq!(friendly_name(""), "Spritz Media Server");
 		assert_eq!(friendly_name("  Living Room  "), "Living Room");
 		assert_eq!(friendly_name(&"x".repeat(80)).len(), 64);
+	}
+
+	#[test]
+	fn discover_advertised_ip_honours_a_specific_bind() {
+		let bind: IpAddr = "192.0.2.7".parse().unwrap();
+		assert_eq!(discover_advertised_ip(bind), bind);
+		// Unspecified bind must produce *some* address, never panic.
+		let _ = discover_advertised_ip("0.0.0.0".parse().unwrap());
 	}
 }
