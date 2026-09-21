@@ -59,7 +59,7 @@ So Spritz isn't a replacement for other media servers; it sits alongside them.
 
 Spritz is built for ad hoc sharing, as in folders you don't serve every day. But it also works as a no-nonsense alternative to the heavier servers above. Point it at your NAS's media folder, leave it running, and it does its thing.
 
-**Note:** Spritz reads the file tree at startup and doesn't watch it for changes. If you add files to a share, restart Spritz. Or let watchexec do it for you: `watchexec -r -- spritz`
+**Note:** Spritz reads the file tree at startup and doesn't watch it for changes. Hence, if you add files to a share, restart Spritz to rebuild its index. Or, let watchexec do it for you: `watchexec -r -- spritz`. With watchexec, the app restarts and rebuilds its index when it detects change to the shared folder(s). Note however that any active streams are shut down as well, so depending on your use case relying on watchexec might or might not be desirable.  
 
 # Install
 
