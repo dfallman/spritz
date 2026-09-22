@@ -1,14 +1,19 @@
 use axum::{
 	body::Body,
-	extract::Request,
+	extract::{ConnectInfo, Request},
 	http::{HeaderMap, StatusCode},
 	response::Response,
 };
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::SERVER;
+
+const MAX_SUBSCRIPTIONS: usize = 128;
+const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EventService {
@@ -19,7 +24,7 @@ pub enum EventService {
 
 #[derive(Clone, Default)]
 pub struct EventHub {
-	inner: Arc<Mutex<HashMap<String, String>>>,
+	inner: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 pub fn parse_callback_url(header: &str) -> Option<String> {
@@ -101,8 +106,12 @@ pub async fn handle(
 	service: EventService,
 	source_protocol_info: String,
 ) -> Response {
+	let peer = req
+		.extensions()
+		.get::<ConnectInfo<SocketAddr>>()
+		.map(|info| info.0.ip());
 	match req.method().as_str() {
-		"SUBSCRIBE" => subscribe(req.headers(), hub, service, source_protocol_info).await,
+		"SUBSCRIBE" => subscribe(req.headers(), hub, service, source_protocol_info, peer).await,
 		"UNSUBSCRIBE" => unsubscribe(req.headers(), hub),
 		_ => Response::builder()
 			.status(StatusCode::METHOD_NOT_ALLOWED.as_u16())
@@ -111,34 +120,61 @@ pub async fn handle(
 	}
 }
 
+fn precondition_failed() -> Response {
+	Response::builder()
+		.status(StatusCode::PRECONDITION_FAILED.as_u16())
+		.header("server", SERVER)
+		.body(Body::empty())
+		.unwrap()
+}
+
 async fn subscribe(
 	headers: &HeaderMap,
 	hub: EventHub,
 	service: EventService,
 	source_protocol_info: String,
+	peer: Option<IpAddr>,
 ) -> Response {
 	let timeout = parse_timeout_seconds(headers.get("timeout").and_then(|v| v.to_str().ok()));
+	let ttl = Duration::from_secs(u64::from(timeout));
 	let sid = if let Some(existing) = headers
 		.get("sid")
 		.and_then(|v| v.to_str().ok())
 		.filter(|s| s.starts_with("uuid:"))
 	{
+		let renewed = hub
+			.inner
+			.lock()
+			.ok()
+			.is_some_and(|mut map| renew_subscription(&mut map, existing, ttl, Instant::now()));
+		if !renewed {
+			return precondition_failed();
+		}
 		existing.to_string()
 	} else {
-		let callback = headers
-			.get("callback")
-			.and_then(|v| v.to_str().ok())
-			.and_then(parse_callback_url);
-		let Some(callback) = callback else {
+		let Some(peer) = peer else {
+			return precondition_failed();
+		};
+		let callback_header = headers.get("callback").and_then(|v| v.to_str().ok());
+		let Some(callback_header) = callback_header else {
+			return precondition_failed();
+		};
+		if !callback_targets_peer(callback_header, peer) {
+			return precondition_failed();
+		}
+		let Some(callback) = parse_callback_url(callback_header) else {
+			return precondition_failed();
+		};
+		let sid = format!("uuid:{}", Uuid::new_v4());
+		let admitted = hub.inner.lock().ok().is_some_and(|mut map| {
+			admit_subscription(&mut map, &sid, ttl, Instant::now(), MAX_SUBSCRIPTIONS)
+		});
+		if !admitted {
 			return Response::builder()
-				.status(StatusCode::PRECONDITION_FAILED.as_u16())
+				.status(StatusCode::SERVICE_UNAVAILABLE.as_u16())
 				.header("server", SERVER)
 				.body(Body::empty())
 				.unwrap();
-		};
-		let sid = format!("uuid:{}", Uuid::new_v4());
-		if let Ok(mut map) = hub.inner.lock() {
-			map.insert(sid.clone(), callback.clone());
 		}
 		let body = event_body_for(service, &source_protocol_info);
 		let sid_notify = sid.clone();
@@ -157,6 +193,65 @@ async fn subscribe(
 		.unwrap()
 }
 
+/// Drop expired rows, then insert `sid` when the table is under `cap`.
+pub fn admit_subscription(
+	map: &mut HashMap<String, Instant>,
+	sid: &str,
+	ttl: Duration,
+	now: Instant,
+	cap: usize,
+) -> bool {
+	map.retain(|_, expires| *expires > now);
+	if map.len() >= cap {
+		return false;
+	}
+	map.insert(sid.to_string(), now + ttl);
+	true
+}
+
+/// Extend `sid` when it is still present and unexpired.
+pub fn renew_subscription(
+	map: &mut HashMap<String, Instant>,
+	sid: &str,
+	ttl: Duration,
+	now: Instant,
+) -> bool {
+	map.retain(|_, expires| *expires > now);
+	match map.get_mut(sid) {
+		Some(expires) => {
+			*expires = now + ttl;
+			true
+		}
+		None => false,
+	}
+}
+
+/// True when the callback URL is HTTP and its host is `peer`.
+/// Hostnames are rejected so the server does not resolve attacker DNS.
+pub fn callback_targets_peer(callback_header: &str, peer: IpAddr) -> bool {
+	let Some(url) = parse_callback_url(callback_header) else {
+		return false;
+	};
+	let Some(target) = parse_callback_target(&url) else {
+		return false;
+	};
+	let Ok(ip) = target.host.parse::<IpAddr>() else {
+		return false;
+	};
+	same_ip(ip, peer)
+}
+
+fn same_ip(a: IpAddr, b: IpAddr) -> bool {
+	normalize_ip(a) == normalize_ip(b)
+}
+
+fn normalize_ip(ip: IpAddr) -> IpAddr {
+	match ip {
+		IpAddr::V6(v) => v.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v)),
+		other => other,
+	}
+}
+
 fn unsubscribe(headers: &HeaderMap, hub: EventHub) -> Response {
 	if let Some(sid) = headers.get("sid").and_then(|v| v.to_str().ok())
 		&& let Ok(mut map) = hub.inner.lock()
@@ -170,33 +265,60 @@ fn unsubscribe(headers: &HeaderMap, hub: EventHub) -> Response {
 		.unwrap()
 }
 
-pub async fn send_notify(callback: &str, sid: &str, seq: u32, body: &str) -> std::io::Result<()> {
-	let url = callback.trim();
-	let rest = url.strip_prefix("http://").ok_or_else(|| {
-		std::io::Error::new(std::io::ErrorKind::InvalidInput, "callback must be http")
-	})?;
+struct CallbackTarget {
+	host: String,
+	port: u16,
+	hostport: String,
+	path: String,
+}
+
+fn parse_callback_target(url: &str) -> Option<CallbackTarget> {
+	let rest = url.trim().strip_prefix("http://")?;
 	let (hostport, path) = match rest.split_once('/') {
-		Some((h, p)) => (h, format!("/{p}")),
-		None => (rest, "/".to_string()),
+		Some((h, p)) => (h.to_string(), format!("/{p}")),
+		None => (rest.to_string(), "/".to_string()),
 	};
 	let (host, port) = if hostport.starts_with('[') {
-		let end = hostport.find(']').ok_or_else(|| {
-			std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad ipv6 callback")
-		})?;
-		let host = &hostport[1..end];
+		let end = hostport.find(']')?;
+		let host = hostport[1..end].to_string();
 		let port = hostport
 			.get(end + 1..)
 			.and_then(|s| s.strip_prefix(':'))
 			.and_then(|p| p.parse().ok())
 			.unwrap_or(80);
-		(host.to_string(), port)
+		(host, port)
 	} else {
 		match hostport.split_once(':') {
 			Some((h, p)) => (h.to_string(), p.parse().unwrap_or(80)),
-			None => (hostport.to_string(), 80),
+			None => (hostport.clone(), 80),
 		}
 	};
+	if host.is_empty() {
+		return None;
+	}
+	Some(CallbackTarget {
+		host,
+		port,
+		hostport,
+		path,
+	})
+}
 
+pub async fn send_notify(callback: &str, sid: &str, seq: u32, body: &str) -> std::io::Result<()> {
+	let target = parse_callback_target(callback).ok_or_else(|| {
+		std::io::Error::new(std::io::ErrorKind::InvalidInput, "callback must be http")
+	})?;
+	// Only dial a literal IP. DNS here would undo the peer check in subscribe.
+	if target.host.parse::<IpAddr>().is_err() {
+		return Err(std::io::Error::new(
+			std::io::ErrorKind::InvalidInput,
+			"callback host must be an ip address",
+		));
+	}
+
+	let path = &target.path;
+	let hostport = &target.hostport;
+	let len = body.len();
 	let req = format!(
 		"NOTIFY {path} HTTP/1.1\r\n\
 		 HOST: {hostport}\r\n\
@@ -205,16 +327,20 @@ pub async fn send_notify(callback: &str, sid: &str, seq: u32, body: &str) -> std
 		 NTS: upnp:propchange\r\n\
 		 SID: {sid}\r\n\
 		 SEQ: {seq}\r\n\
-		 CONTENT-LENGTH: {}\r\n\
+		 CONTENT-LENGTH: {len}\r\n\
 		 CONNECTION: close\r\n\
 		 \r\n\
-		 {body}",
-		body.len()
+		 {body}"
 	);
 
-	let mut stream = tokio::net::TcpStream::connect((host.as_str(), port)).await?;
+	let connect = tokio::net::TcpStream::connect((target.host.as_str(), target.port));
+	let mut stream = tokio::time::timeout(NOTIFY_TIMEOUT, connect)
+		.await
+		.map_err(|e| std::io::Error::new(std::io::ErrorKind::TimedOut, e))??;
 	use tokio::io::AsyncWriteExt;
-	stream.write_all(req.as_bytes()).await?;
+	tokio::time::timeout(NOTIFY_TIMEOUT, stream.write_all(req.as_bytes()))
+		.await
+		.map_err(|e| std::io::Error::new(std::io::ErrorKind::TimedOut, e))??;
 	Ok(())
 }
 
@@ -279,5 +405,70 @@ mod tests {
 		assert!(req.contains("SID: uuid:abc"), "{req}");
 		assert!(req.contains("SEQ: 0"), "{req}");
 		assert!(req.contains("NTS: upnp:propchange"), "{req}");
+	}
+
+	#[test]
+	fn callback_must_target_the_peer_ip() {
+		let peer: IpAddr = "192.168.1.9".parse().unwrap();
+		assert!(callback_targets_peer(
+			"<http://192.168.1.9:54000/evt>",
+			peer
+		));
+		assert!(!callback_targets_peer("<http://127.0.0.1:80/>", peer));
+		assert!(!callback_targets_peer("<http://evil.example/x>", peer));
+		assert!(!callback_targets_peer("<https://192.168.1.9/>", peer));
+		let mapped: IpAddr = "::ffff:192.168.1.9".parse().unwrap();
+		assert!(callback_targets_peer("<http://192.168.1.9:1/>", mapped));
+	}
+
+	#[test]
+	fn subscriptions_expire_and_honor_the_cap() {
+		let now = Instant::now();
+		let mut map = HashMap::new();
+		assert!(admit_subscription(
+			&mut map,
+			"uuid:a",
+			Duration::from_secs(30),
+			now,
+			1
+		));
+		assert!(!admit_subscription(
+			&mut map,
+			"uuid:b",
+			Duration::from_secs(30),
+			now,
+			1
+		));
+		assert!(renew_subscription(
+			&mut map,
+			"uuid:a",
+			Duration::from_secs(30),
+			now
+		));
+		assert!(!renew_subscription(
+			&mut map,
+			"uuid:missing",
+			Duration::from_secs(30),
+			now
+		));
+
+		let mut expired = HashMap::new();
+		assert!(admit_subscription(
+			&mut expired,
+			"uuid:a",
+			Duration::from_secs(1),
+			now,
+			1
+		));
+		let later = now + Duration::from_secs(2);
+		assert!(admit_subscription(
+			&mut expired,
+			"uuid:b",
+			Duration::from_secs(30),
+			later,
+			1
+		));
+		assert!(!expired.contains_key("uuid:a"));
+		assert!(expired.contains_key("uuid:b"));
 	}
 }
