@@ -69,7 +69,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "api"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -217,7 +217,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "api",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "dlna"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -1030,7 +1030,7 @@ dependencies = [
 
 [[package]]
 name = "spritz-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "anyhow",
  "rustix",
