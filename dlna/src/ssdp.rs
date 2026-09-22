@@ -4,9 +4,12 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 const MULTICAST_V4: &str = "239.255.255.250:1900";
 const MULTICAST_V6: &str = "[FF02::C]:1900";
+/// In-flight M-SEARCH replies. Extra searches are dropped.
+const MAX_MSEARCH_IN_FLIGHT: usize = 32;
 
 pub async fn run(
 	config: Arc<DlnaConfig>,
@@ -43,6 +46,7 @@ pub async fn run(
 		println!("SSDP: listening on [FF02::C]:1900");
 	}
 
+	let slots = Arc::new(Semaphore::new(MAX_MSEARCH_IN_FLIGHT));
 	let mut buf4 = vec![0u8; 2048];
 	let mut buf6 = vec![0u8; 2048];
 	let mut interval = tokio::time::interval(Duration::from_secs(180));
@@ -71,12 +75,12 @@ pub async fn run(
 			}
 			result = recv_opt(&socket_v4, &mut buf4) => {
 				if let Some(s) = &socket_v4 {
-					handle_datagram(result, &buf4, s, &config).await;
+					handle_datagram(result, &buf4, s, &config, &slots).await;
 				}
 			}
 			result = recv_opt(&socket_v6, &mut buf6) => {
 				if let Some(s) = &socket_v6 {
-					handle_datagram(result, &buf6, s, &config).await;
+					handle_datagram(result, &buf6, s, &config, &slots).await;
 				}
 			}
 		}
@@ -98,12 +102,19 @@ async fn handle_datagram(
 	buf: &[u8],
 	socket: &Arc<UdpSocket>,
 	config: &Arc<DlnaConfig>,
+	slots: &Arc<Semaphore>,
 ) {
 	match result {
 		Ok((len, src)) => {
 			let msg = std::str::from_utf8(&buf[..len]).unwrap_or("");
-			if msg.starts_with("M-SEARCH") {
-				respond_to_msearch(msg, src, Arc::clone(socket), Arc::clone(config));
+			if msg.starts_with("M-SEARCH") && ssdp_source_allowed(src) {
+				respond_to_msearch(
+					msg,
+					src,
+					Arc::clone(socket),
+					Arc::clone(config),
+					Arc::clone(slots),
+				);
 			}
 		}
 		Err(e) if e.kind() == ErrorKind::Interrupted => {}
@@ -358,11 +369,21 @@ async fn announce_byebye(socket: &UdpSocket, config: &DlnaConfig, multicast_host
 	}
 }
 
-fn respond_to_msearch(msg: &str, src: SocketAddr, socket: Arc<UdpSocket>, config: Arc<DlnaConfig>) {
+fn respond_to_msearch(
+	msg: &str,
+	src: SocketAddr,
+	socket: Arc<UdpSocket>,
+	config: Arc<DlnaConfig>,
+	slots: Arc<Semaphore>,
+) {
 	let st = header_value(msg, "ST").unwrap_or_default();
-	if !st_is_relevant(&st, &config.device_uuid) {
+	if !st_is_relevant(&st, &config.device_uuid) || !man_is_discover(msg) {
 		return;
 	}
+	let Ok(permit) = slots.try_acquire_owned() else {
+		tracing::debug!("SSDP: dropping M-SEARCH, too many in flight");
+		return;
+	};
 
 	// UPnP 1.0 §1.2.3: client sends MX (1-5s) and the server must wait a
 	// uniformly-random interval in [0, MX] before responding, so multiple
@@ -374,6 +395,7 @@ fn respond_to_msearch(msg: &str, src: SocketAddr, socket: Arc<UdpSocket>, config
 	// function returns immediately and the receive loop stays unblocked.
 	let mx = parse_mx(msg);
 	tokio::spawn(async move {
+		let _permit: OwnedSemaphorePermit = permit;
 		if mx > 0 {
 			let seed = std::time::SystemTime::now()
 				.duration_since(std::time::UNIX_EPOCH)
@@ -413,21 +435,74 @@ fn respond_to_msearch(msg: &str, src: SocketAddr, socket: Arc<UdpSocket>, config
 }
 
 fn location_for_peer(peer: SocketAddr, config: &DlnaConfig) -> String {
-	let ip =
-		local_ip_for_peer(peer).unwrap_or_else(|| location_ip_for_family(peer.is_ipv6(), config));
+	let ip = local_ip_for_peer(peer)
+		.filter(|ip| family_served(*ip, config))
+		.unwrap_or_else(|| location_ip_for_family(peer.is_ipv6(), config));
 	format!(
 		"http://{}/upnp/description.xml",
 		spritz_core::format_http_authority(ip, config.http_port)
 	)
 }
 
+/// UPnP 1.0 requires `MAN: "ssdp:discover"` on an M-SEARCH.
+fn man_is_discover(msg: &str) -> bool {
+	header_value(msg, "MAN").is_some_and(|v| {
+		v.trim()
+			.trim_matches('"')
+			.eq_ignore_ascii_case("ssdp:discover")
+	})
+}
+
+/// Private, link-local, loopback, CGNAT, and IPv6 unique-local addresses.
+/// Global addresses are allowed only when [`local_ip_for_peer`] finds them
+/// on a connected subnet, so replies are not reflected onto the public internet.
+fn ssdp_source_allowed(src: SocketAddr) -> bool {
+	is_ssdp_lan_ip(src.ip()) || local_ip_for_peer(src).is_some()
+}
+
+fn is_ssdp_lan_ip(ip: IpAddr) -> bool {
+	match ip {
+		IpAddr::V4(v) => {
+			let o = v.octets();
+			v.is_loopback()
+				|| o[0] == 10
+				|| (o[0] == 172 && (o[1] & 0xf0) == 16)
+				|| (o[0] == 192 && o[1] == 168)
+				|| (o[0] == 169 && o[1] == 254)
+				|| (o[0] == 100 && (o[1] & 0xc0) == 64)
+		}
+		IpAddr::V6(v) => {
+			let seg0 = v.segments()[0];
+			v.is_loopback() || (seg0 & 0xffc0) == 0xfe80 || (seg0 & 0xfe00) == 0xfc00
+		}
+	}
+}
+
 fn location_ip_for_family(want_v6: bool, config: &DlnaConfig) -> IpAddr {
-	if want_v6 {
-		advertised_ipv6().unwrap_or(config.local_ip)
-	} else if config.local_ip.is_ipv4() {
-		config.local_ip
-	} else {
-		first_ipv4().map(IpAddr::V4).unwrap_or(config.local_ip)
+	let want_v6 = want_v6 && config.http_ipv6;
+	if want_v6 && let Some(ip) = advertised_ipv6() {
+		return ip;
+	}
+	if config.http_ipv4 {
+		if config.local_ip.is_ipv4() {
+			return config.local_ip;
+		}
+		if let Some(v4) = first_ipv4() {
+			return IpAddr::V4(v4);
+		}
+	}
+	if config.http_ipv6
+		&& let Some(ip) = advertised_ipv6()
+	{
+		return ip;
+	}
+	config.local_ip
+}
+
+fn family_served(ip: IpAddr, config: &DlnaConfig) -> bool {
+	match ip {
+		IpAddr::V4(_) => config.http_ipv4,
+		IpAddr::V6(_) => config.http_ipv6,
 	}
 }
 
@@ -606,5 +681,68 @@ mod tests {
 		assert!(usable_ipv6("2001:db8::1".parse().unwrap()));
 		assert!(!usable_ipv6("fe80::1".parse().unwrap()));
 		assert!(!usable_ipv6("::1".parse().unwrap()));
+	}
+
+	#[test]
+	fn man_header_must_be_ssdp_discover() {
+		let ok = "M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:discover\"\r\nST: ssdp:all\r\n";
+		assert!(man_is_discover(ok));
+		assert!(man_is_discover(
+			"M-SEARCH * HTTP/1.1\r\nman: ssdp:discover\r\n"
+		));
+		assert!(!man_is_discover("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n"));
+		assert!(!man_is_discover(
+			"M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:alive\"\r\n"
+		));
+	}
+
+	#[test]
+	fn lan_ips_are_allowed_and_public_ips_are_not() {
+		for ip in [
+			"10.1.2.3",
+			"172.16.0.1",
+			"192.168.1.5",
+			"169.254.1.1",
+			"100.64.0.1",
+			"127.0.0.1",
+		] {
+			assert!(is_ssdp_lan_ip(ip.parse().unwrap()), "{ip}");
+		}
+		assert!(!is_ssdp_lan_ip("8.8.8.8".parse().unwrap()));
+		assert!(!is_ssdp_lan_ip("203.0.113.5".parse().unwrap()));
+		assert!(is_ssdp_lan_ip("fe80::1".parse().unwrap()));
+		assert!(is_ssdp_lan_ip("fd00::1".parse().unwrap()));
+		assert!(!is_ssdp_lan_ip("2001:db8::1".parse().unwrap()));
+	}
+
+	fn bare_config(ip: &str, v4: bool, v6: bool) -> DlnaConfig {
+		DlnaConfig {
+			device_uuid: UUID.into(),
+			friendly_name: "Spritz".into(),
+			http_port: 8080,
+			local_ip: ip.parse().unwrap(),
+			http_ipv4: v4,
+			http_ipv6: v6,
+			media_dirs: vec![],
+			media_files: vec![],
+			media_sizes: vec![],
+			media_dates: vec![],
+			probes: crate::ProbeCache::shared(vec![], vec![], vec![]),
+			media_has_art: vec![],
+			media_subs: vec![],
+			video_idx: vec![],
+			audio_idx: vec![],
+			folder_nodes: vec![],
+			event_hub: crate::event::EventHub::default(),
+		}
+	}
+
+	#[test]
+	fn ipv6_search_uses_ipv4_location_when_http_is_ipv4_only() {
+		let config = bare_config("192.0.2.10", true, false);
+		let peer: SocketAddr = "[2001:db8::5]:1900".parse().unwrap();
+		let loc = location_for_peer(peer, &config);
+		assert!(loc.contains("192.0.2.10"), "{loc}");
+		assert!(!loc.contains("2001:db8"), "{loc}");
 	}
 }

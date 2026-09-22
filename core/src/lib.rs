@@ -3,11 +3,13 @@ use std::path::{Component, Path, PathBuf};
 use walkdir::WalkDir;
 
 mod meta;
+mod open;
 pub use meta::{
-	AudioCodec, MediaInfo, VideoCodec, album_art_sidecar, dlna_org_pn, dlna_org_pn_for,
-	format_dlna_duration, has_embedded_art, probe_duration, probe_media, protocol_info,
-	protocol_info_pn,
+	AudioCodec, MediaInfo, SUBTITLE_ASS, SUBTITLE_SRT, SUBTITLE_SSA, SUBTITLE_VTT, VideoCodec,
+	album_art_sidecar, dlna_org_pn, dlna_org_pn_for, format_dlna_duration, has_embedded_art,
+	probe_duration, probe_media, protocol_info, protocol_info_pn, sidecar_subtitle_bits,
 };
+pub use open::open_media_file;
 
 /// Directory names we never descend into while indexing. NAS thumbnail
 /// stores, recycle bins, and VCS metadata are a common source of permission
@@ -140,23 +142,102 @@ pub fn media_url_path(media: &Path, dirs: &[PathBuf]) -> Option<(usize, String)>
 }
 
 pub fn encode_path(path: &Path) -> String {
-	#[cfg(windows)]
-	let s = path.to_string_lossy().replace('\\', "/");
-	#[cfg(not(windows))]
-	let s = path.to_string_lossy().to_string();
-
-	s.split('/')
-		.map(|seg| urlencoding::encode(seg).into_owned())
+	path.components()
+		.filter_map(|component| match component {
+			Component::Normal(seg) => Some(percent_encode(seg.as_encoded_bytes())),
+			_ => None,
+		})
 		.collect::<Vec<_>>()
 		.join("/")
 }
 
+/// Decode a `/`-separated, percent-encoded relative path.
+/// `..`, empty segments, and NUL bytes are rejected. On Unix the bytes are
+/// kept as-is, so a non-UTF-8 filename round-trips.
+pub fn decode_rel_path(encoded: &str) -> Option<PathBuf> {
+	if encoded.is_empty() {
+		return None;
+	}
+	let mut path = PathBuf::new();
+	for seg in encoded.split('/') {
+		let bytes = percent_decode(seg)?;
+		if bytes.is_empty()
+			|| bytes.contains(&0)
+			|| bytes.contains(&b'/')
+			|| (cfg!(windows) && bytes.contains(&b'\\'))
+			|| bytes == b"."
+			|| bytes == b".."
+		{
+			return None;
+		}
+		path.push(os_from_bytes(&bytes)?);
+	}
+	Some(path)
+}
+
+fn percent_encode(bytes: &[u8]) -> String {
+	let mut out = String::new();
+	for &b in bytes {
+		match b {
+			b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+				out.push(b as char);
+			}
+			_ => out.push_str(&format!("%{b:02X}")),
+		}
+	}
+	out
+}
+
+fn percent_decode(seg: &str) -> Option<Vec<u8>> {
+	let bytes = seg.as_bytes();
+	let mut out = Vec::with_capacity(bytes.len());
+	let mut i = 0;
+	while i < bytes.len() {
+		if bytes[i] == b'%' {
+			if i + 2 >= bytes.len() {
+				return None;
+			}
+			let hi = hex_val(bytes[i + 1])?;
+			let lo = hex_val(bytes[i + 2])?;
+			out.push((hi << 4) | lo);
+			i += 3;
+		} else {
+			out.push(bytes[i]);
+			i += 1;
+		}
+	}
+	Some(out)
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+	match b {
+		b'0'..=b'9' => Some(b - b'0'),
+		b'a'..=b'f' => Some(b - b'a' + 10),
+		b'A'..=b'F' => Some(b - b'A' + 10),
+		_ => None,
+	}
+}
+
+#[cfg(unix)]
+fn os_from_bytes(bytes: &[u8]) -> Option<std::ffi::OsString> {
+	use std::os::unix::ffi::OsStringExt;
+	Some(std::ffi::OsString::from_vec(bytes.to_vec()))
+}
+
+#[cfg(not(unix))]
+fn os_from_bytes(bytes: &[u8]) -> Option<std::ffi::OsString> {
+	Some(std::ffi::OsString::from(std::str::from_utf8(bytes).ok()?))
+}
+
 /// `dc:date` for DIDL. Date-only ISO-8601; Samsung requires the element to exist.
 pub fn dc_date(mtime: std::time::SystemTime) -> String {
-	let secs = mtime
-		.duration_since(std::time::UNIX_EPOCH)
-		.map(|d| d.as_secs() as i64)
-		.unwrap_or(0);
+	let secs = match mtime.duration_since(std::time::UNIX_EPOCH) {
+		Ok(d) => d.as_secs() as i64,
+		Err(e) => {
+			let before = e.duration().as_secs() as i64;
+			if before == 0 { 0 } else { -before }
+		}
+	};
 	let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
 	format!("{y:04}-{m:02}-{d:02}")
 }
@@ -437,6 +518,42 @@ mod tests {
 	}
 
 	#[test]
+	fn decode_rel_path_round_trips_encoded_segments() {
+		for path in ["My Movie.mp4", "shows/S01/ep 1.mkv", "å.mp3"] {
+			let encoded = encode_path(Path::new(path));
+			assert_eq!(decode_rel_path(&encoded).unwrap(), Path::new(path));
+		}
+	}
+
+	#[test]
+	fn decode_rel_path_rejects_dot_dot_nul_and_empty_segments() {
+		assert!(decode_rel_path("..").is_none());
+		assert!(decode_rel_path("%2e%2e").is_none());
+		assert!(decode_rel_path("a/%2E%2E/b.mp4").is_none());
+		assert!(decode_rel_path("%00.mp4").is_none());
+		assert!(decode_rel_path("a//b.mp4").is_none());
+		assert!(decode_rel_path("%2Fetc%2Fpasswd").is_none());
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn decode_rel_path_keeps_a_backslash_on_unix() {
+		let encoded = encode_path(Path::new("a\\b.mp4"));
+		assert_eq!(encoded, "a%5Cb.mp4");
+		assert_eq!(decode_rel_path(&encoded).unwrap(), Path::new("a\\b.mp4"));
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn encode_path_round_trips_non_utf8_bytes() {
+		use std::os::unix::ffi::OsStrExt;
+		let name = std::ffi::OsStr::from_bytes(&[0xff, b'.', b'm', b'p', b'4']);
+		let encoded = encode_path(Path::new(name));
+		assert_eq!(encoded, "%FF.mp4");
+		assert_eq!(decode_rel_path(&encoded).unwrap().as_os_str(), name);
+	}
+
+	#[test]
 	fn media_url_path_uses_the_first_matching_prefix() {
 		let dirs = vec![PathBuf::from("/media"), PathBuf::from("/media/movies")];
 		let file = Path::new("/media/movies/a.mp4");
@@ -450,6 +567,14 @@ mod tests {
 	#[test]
 	fn dc_date_formats_unix_epoch() {
 		assert_eq!(dc_date(std::time::SystemTime::UNIX_EPOCH), "1970-01-01");
+	}
+
+	#[test]
+	fn dc_date_formats_the_day_before_the_epoch() {
+		let t = std::time::UNIX_EPOCH
+			.checked_sub(std::time::Duration::from_secs(86_400))
+			.unwrap();
+		assert_eq!(dc_date(t), "1969-12-31");
 	}
 
 	#[test]

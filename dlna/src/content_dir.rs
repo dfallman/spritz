@@ -204,7 +204,7 @@ fn browse(headers: &HeaderMap, body: &str, config: &DlnaConfig) -> Response {
 		(FOLDER_ID, _) => {
 			// Source roots, filtered to those with media in subtree.
 			let root_count = config.media_dirs.len();
-			let entries: Vec<String> = config
+			let indices: Vec<usize> = config
 				.folder_nodes
 				.iter()
 				.enumerate()
@@ -212,9 +212,20 @@ fn browse(headers: &HeaderMap, body: &str, config: &DlnaConfig) -> Response {
 				.filter(|(_, node)| {
 					!node.subfolder_indices.is_empty() || !node.media_indices.is_empty()
 				})
-				.map(|(i, node)| folder_container_xml(i, FOLDER_ID, node))
+				.map(|(i, _)| i)
 				.collect();
-			paginate(entries, start, count)
+			let total = indices.len();
+			let (slice_start, slice_end) = page_slice(start, count, total);
+			let entries: Vec<String> = indices[slice_start..slice_end]
+				.iter()
+				.filter_map(|&i| {
+					config
+						.folder_nodes
+						.get(i)
+						.map(|node| folder_container_xml(i, FOLDER_ID, node))
+				})
+				.collect();
+			(didl_wrap(&entries), entries.len(), total)
 		}
 		(id, _) if id.starts_with("f:") => {
 			let idx: usize = match id[2..].parse() {
@@ -394,19 +405,12 @@ fn category_children(
 	(didl_wrap(&items), returned, total)
 }
 
-fn paginate(entries: Vec<String>, start: usize, count: usize) -> (String, usize, usize) {
-	let total = entries.len();
-	let (slice_start, slice_end) = page_slice(start, count, total);
-	let slice = &entries[slice_start..slice_end];
-	(didl_wrap(slice), slice.len(), total)
-}
-
 fn page_slice(start: usize, count: usize, total: usize) -> (usize, usize) {
 	let start = start.min(total);
 	let limit = if count == 0 {
 		DEFAULT_BROWSE_PAGE
 	} else {
-		count
+		count.min(DEFAULT_BROWSE_PAGE)
 	};
 	let end = start.saturating_add(limit).min(total);
 	(start, end)
@@ -473,25 +477,28 @@ fn folder_children(
 	config: &DlnaConfig,
 	public_base: &str,
 ) -> (String, usize, usize) {
+	let total = node.subfolder_indices.len() + node.media_indices.len();
+	let (slice_start, slice_end) = page_slice(start, count, total);
 	let self_id = format!("f:{idx}");
-	let mut entries: Vec<String> = Vec::new();
-
-	for &sub_i in &node.subfolder_indices {
-		if let Some(sub) = config.folder_nodes.get(sub_i) {
-			entries.push(folder_container_xml(sub_i, &self_id, sub));
-		}
-	}
-	for &media_i in &node.media_indices {
-		if let Some(path) = config.media_files.get(media_i)
-			&& let Some(item) = {
+	let mut entries = Vec::with_capacity(slice_end - slice_start);
+	for i in slice_start..slice_end {
+		if i < node.subfolder_indices.len() {
+			let sub_i = node.subfolder_indices[i];
+			if let Some(sub) = config.folder_nodes.get(sub_i) {
+				entries.push(folder_container_xml(sub_i, &self_id, sub));
+			}
+		} else {
+			let media_i = node.media_indices[i - node.subfolder_indices.len()];
+			if let Some(path) = config.media_files.get(media_i) {
 				let oid = item_id(&self_id, media_i);
-				item_xml(media_i, path, &oid, &self_id, config, public_base)
-			} {
-			entries.push(item);
+				if let Some(item) = item_xml(media_i, path, &oid, &self_id, config, public_base) {
+					entries.push(item);
+				}
+			}
 		}
 	}
-
-	paginate(entries, start, count)
+	let returned = entries.len();
+	(didl_wrap(&entries), returned, total)
 }
 
 fn didl_wrap(entries: &[String]) -> String {
@@ -591,32 +598,30 @@ fn item_xml(
 	let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 	let mime = spritz_core::mime_for_ext(ext).unwrap_or("application/octet-stream");
 	let class = upnp_class_for_mime(mime);
-	let pn = config
-		.media_pns
-		.get(index)
-		.map(String::as_str)
-		.filter(|s| !s.is_empty());
-	let protocol = spritz_core::protocol_info_pn(mime, pn, DLNA_CONTENT_FEATURES);
+	let (pn, duration_attr, resolution_attr) = {
+		let probes = config.probes.read().unwrap_or_else(|err| err.into_inner());
+		let pn = probes.pns.get(index).filter(|s| !s.is_empty()).cloned();
+		let duration_attr = probes
+			.durations
+			.get(index)
+			.filter(|s| !s.is_empty())
+			.map(|s| format!(r#" duration="{s}""#))
+			.unwrap_or_default();
+		let resolution_attr = probes
+			.resolutions
+			.get(index)
+			.filter(|s| !s.is_empty())
+			.map(|s| format!(r#" resolution="{s}""#))
+			.unwrap_or_default();
+		(pn, duration_attr, resolution_attr)
+	};
+	let protocol = spritz_core::protocol_info_pn(mime, pn.as_deref(), DLNA_CONTENT_FEATURES);
 
 	// Emit size= only when we know it — Infuse treats size="0" as "empty file".
 	let size_attr = match config.media_sizes.get(index).copied().unwrap_or(0) {
 		0 => String::new(),
 		n => format!(r#" size="{n}""#),
 	};
-	let duration_attr = config
-		.media_durations
-		.get(index)
-		.map(String::as_str)
-		.filter(|s| !s.is_empty())
-		.map(|s| format!(r#" duration="{s}""#))
-		.unwrap_or_default();
-	let resolution_attr = config
-		.media_resolutions
-		.get(index)
-		.map(String::as_str)
-		.filter(|s| !s.is_empty())
-		.map(|s| format!(r#" resolution="{s}""#))
-		.unwrap_or_default();
 	let date = config
 		.media_dates
 		.get(index)
@@ -628,7 +633,12 @@ fn item_xml(
 	} else {
 		format!(r#" refID="m:{index}""#)
 	};
-	let extra_res = sidecar_subtitle_res(path, public_base, &config.media_dirs);
+	let extra_res = sidecar_subtitle_res(
+		path,
+		public_base,
+		&config.media_dirs,
+		config.media_subs.get(index).copied().unwrap_or(0),
+	);
 	let art = if config.media_has_art.get(index).copied().unwrap_or(false) {
 		format!("\n    <upnp:albumArtURI>http://{public_base}/art/{index}</upnp:albumArtURI>")
 	} else {
@@ -651,20 +661,19 @@ fn sidecar_subtitle_res(
 	path: &Path,
 	public_base: &str,
 	media_dirs: &[std::path::PathBuf],
+	bits: u8,
 ) -> String {
 	let mut extra = String::new();
-	for (ext, mime) in [
-		("srt", "text/srt"),
-		("vtt", "text/vtt"),
-		("ass", "text/x-ssa"),
+	for (bit, ext, mime) in [
+		(spritz_core::SUBTITLE_SRT, "srt", "text/srt"),
+		(spritz_core::SUBTITLE_VTT, "vtt", "text/vtt"),
+		(spritz_core::SUBTITLE_ASS, "ass", "text/x-ssa"),
+		(spritz_core::SUBTITLE_SSA, "ssa", "text/x-ssa"),
 	] {
-		let sub = path.with_extension(ext);
-		let Ok(meta) = std::fs::symlink_metadata(&sub) else {
-			continue;
-		};
-		if meta.file_type().is_symlink() || !meta.is_file() {
+		if bits & bit == 0 {
 			continue;
 		}
+		let sub = path.with_extension(ext);
 		let Some((dir_idx, url_path)) = spritz_core::media_url_path(&sub, media_dirs) else {
 			continue;
 		};
@@ -700,6 +709,7 @@ mod tests {
 	#[test]
 	fn page_slice_honors_explicit_count_and_clamps_start() {
 		assert_eq!(page_slice(0, 50, 500), (0, 50));
+		assert_eq!(page_slice(0, 10_000, 5_000), (0, DEFAULT_BROWSE_PAGE));
 		assert_eq!(page_slice(999, 10, 50), (50, 50));
 		assert_eq!(page_slice(40, 20, 50), (40, 50));
 	}
@@ -784,14 +794,15 @@ mod tests {
 			friendly_name: "Spritz".into(),
 			http_port: 8080,
 			local_ip: "127.0.0.1".parse().unwrap(),
+			http_ipv4: true,
+			http_ipv6: false,
 			media_dirs: vec![tmp.path().to_path_buf()],
 			media_files: vec![movie.clone()],
 			media_sizes: vec![1],
 			media_dates: vec!["2020-01-01".into()],
-			media_durations: vec!["0:00:02.000".into()],
-			media_resolutions: vec![],
-			media_pns: vec![],
+			probes: crate::ProbeCache::shared(vec!["0:00:02.000".into()], vec![], vec![]),
 			media_has_art: vec![true],
+			media_subs: vec![spritz_core::SUBTITLE_SRT | spritz_core::SUBTITLE_SSA],
 			video_idx: vec![0],
 			audio_idx: vec![],
 			folder_nodes: vec![],
@@ -800,7 +811,9 @@ mod tests {
 		let xml = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
 		assert!(xml.contains("/m/0/clip.mp4"), "{xml}");
 		assert!(xml.contains("/m/0/clip.srt"), "{xml}");
+		assert!(xml.contains("/m/0/clip.ssa"), "{xml}");
 		assert!(xml.contains("text/srt"), "{xml}");
+		assert!(xml.contains("text/x-ssa"), "{xml}");
 		assert!(xml.contains(r#"duration="0:00:02.000""#), "{xml}");
 		assert!(
 			!xml.contains("DLNA.ORG_PN=AVC_MP4"),
@@ -821,14 +834,19 @@ mod tests {
 			friendly_name: "Spritz".into(),
 			http_port: 8080,
 			local_ip: "127.0.0.1".parse().unwrap(),
+			http_ipv4: true,
+			http_ipv6: false,
 			media_dirs: vec![tmp.path().to_path_buf()],
 			media_files: vec![movie.clone()],
 			media_sizes: vec![1],
 			media_dates: vec!["2020-01-01".into()],
-			media_durations: vec!["0:01:00.000".into()],
-			media_resolutions: vec!["1920x1080".into()],
-			media_pns: vec!["AVC_MP4_HP_HD_AAC".into()],
+			probes: crate::ProbeCache::shared(
+				vec!["0:01:00.000".into()],
+				vec!["1920x1080".into()],
+				vec!["AVC_MP4_HP_HD_AAC".into()],
+			),
 			media_has_art: vec![false],
+			media_subs: vec![0],
 			video_idx: vec![0],
 			audio_idx: vec![],
 			folder_nodes: vec![],
@@ -838,5 +856,36 @@ mod tests {
 		assert!(xml.contains("DLNA.ORG_PN=AVC_MP4_HP_HD_AAC"), "{xml}");
 		assert!(xml.contains(r#"resolution="1920x1080""#), "{xml}");
 		assert!(xml.contains(r#"duration="0:01:00.000""#), "{xml}");
+	}
+
+	#[test]
+	fn item_xml_picks_up_a_probe_that_lands_later() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = tmp.path().join("clip.mp4");
+		std::fs::write(&movie, b"x").unwrap();
+		let config = DlnaConfig {
+			device_uuid: "u".into(),
+			friendly_name: "Spritz".into(),
+			http_port: 8080,
+			local_ip: "127.0.0.1".parse().unwrap(),
+			http_ipv4: true,
+			http_ipv6: false,
+			media_dirs: vec![tmp.path().to_path_buf()],
+			media_files: vec![movie.clone()],
+			media_sizes: vec![1],
+			media_dates: vec!["2020-01-01".into()],
+			probes: crate::ProbeCache::empty(1),
+			media_has_art: vec![false],
+			media_subs: vec![0],
+			video_idx: vec![0],
+			audio_idx: vec![],
+			folder_nodes: vec![],
+			event_hub: crate::event::EventHub::default(),
+		};
+		let before = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
+		assert!(!before.contains("duration="), "{before}");
+		config.probes.write().unwrap().durations[0] = "0:00:03.000".into();
+		let after = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
+		assert!(after.contains(r#"duration="0:00:03.000""#), "{after}");
 	}
 }
