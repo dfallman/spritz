@@ -6,7 +6,7 @@ use axum::{
 };
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
 
@@ -33,20 +33,24 @@ pub struct DlnaConfig {
 	pub friendly_name: String,
 	pub http_port: u16,
 	pub local_ip: IpAddr,
+	/// The HTTP socket accepts IPv4 connections.
+	pub http_ipv4: bool,
+	/// The HTTP socket accepts IPv6 connections.
+	pub http_ipv6: bool,
 	pub media_dirs: Vec<PathBuf>,
 	pub media_files: Vec<PathBuf>,
 	/// File sizes parallel to `media_files`; 0 when stat() failed.
 	pub media_sizes: Vec<u64>,
 	/// `dc:date` values parallel to `media_files` (`YYYY-MM-DD`).
 	pub media_dates: Vec<String>,
-	/// DIDL duration (`H:MM:SS.mmm`); empty when unknown.
-	pub media_durations: Vec<String>,
-	/// DIDL `resolution` (`1920x1080`); empty when unknown.
-	pub media_resolutions: Vec<String>,
-	/// `DLNA.ORG_PN` value; empty when omitted (unknown or non-DLNA codec).
-	pub media_pns: Vec<String>,
+	/// Duration, resolution, and DLNA profile. Empty strings mean unknown.
+	/// Filled in after HTTP is already accepting connections.
+	pub probes: Arc<RwLock<ProbeCache>>,
 	/// True when a sidecar or embedded cover exists for `/art/{i}`.
 	pub media_has_art: Vec<bool>,
+	/// Sidecar subtitle bitset parallel to `media_files`
+	/// (`spritz_core::SUBTITLE_*`).
+	pub media_subs: Vec<u8>,
 	/// Indices into `media_files` for video items (flat Videos container).
 	pub video_idx: Vec<usize>,
 	/// Indices into `media_files` for audio items (flat Music container).
@@ -57,6 +61,37 @@ pub struct DlnaConfig {
 	/// indexing. Referenced by DIDL ids `f:N` in the "By folder" view.
 	pub folder_nodes: Vec<FolderNode>,
 	pub event_hub: event::EventHub,
+}
+
+/// Container metadata parallel to `DlnaConfig::media_files`.
+/// Empty strings are omitted from DIDL.
+#[derive(Clone, Debug, Default)]
+pub struct ProbeCache {
+	pub durations: Vec<String>,
+	pub resolutions: Vec<String>,
+	pub pns: Vec<String>,
+}
+
+impl ProbeCache {
+	pub fn shared(
+		durations: Vec<String>,
+		resolutions: Vec<String>,
+		pns: Vec<String>,
+	) -> Arc<RwLock<Self>> {
+		Arc::new(RwLock::new(Self {
+			durations,
+			resolutions,
+			pns,
+		}))
+	}
+
+	pub fn empty(len: usize) -> Arc<RwLock<Self>> {
+		Arc::new(RwLock::new(Self {
+			durations: vec![String::new(); len],
+			resolutions: vec![String::new(); len],
+			pns: vec![String::new(); len],
+		}))
+	}
 }
 
 /// DLNA protocolInfo 4th field: byte-seek (OP=01), original format (CI=0),

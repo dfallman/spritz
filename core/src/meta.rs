@@ -79,10 +79,11 @@ pub fn dlna_org_pn(ext: &str) -> Option<&'static str> {
 }
 
 /// Profile from a probed file. Omits the PN rather than advertising H.264
-/// for HEVC/VP9/AV1/unknown video.
+/// for HEVC/VP9/AV1/unknown video, or AAC/AC3 when the probed audio codec
+/// is something else.
 pub fn dlna_org_pn_for(ext: &str, info: &MediaInfo) -> Option<&'static str> {
 	let ext = ext.to_ascii_lowercase();
-	match info.video_codec {
+	let pn = match info.video_codec {
 		Some(VideoCodec::Avc) => {
 			let h = info.height.unwrap_or(0);
 			if matches!(ext.as_str(), "mkv" | "webm") {
@@ -105,6 +106,22 @@ pub fn dlna_org_pn_for(ext: &str, info: &MediaInfo) -> Option<&'static str> {
 		}
 		Some(_) => None,
 		None => dlna_org_pn(&ext),
+	};
+	pn.filter(|pn| pn_matches_audio(pn, info.audio_codec))
+}
+
+/// AAC and AC3 profiles name the audio codec. When the probe found a
+/// different codec, omit the PN. Unknown audio keeps the video profile.
+fn pn_matches_audio(pn: &str, audio: Option<AudioCodec>) -> bool {
+	let Some(audio) = audio else {
+		return true;
+	};
+	if pn.contains("AAC") {
+		audio == AudioCodec::Aac
+	} else if pn.contains("AC3") {
+		audio == AudioCodec::Ac3
+	} else {
+		true
 	}
 }
 
@@ -139,6 +156,34 @@ pub fn album_art_sidecar(media: &Path) -> Option<PathBuf> {
 	None
 }
 
+pub const SUBTITLE_SRT: u8 = 1 << 0;
+pub const SUBTITLE_VTT: u8 = 1 << 1;
+pub const SUBTITLE_ASS: u8 = 1 << 2;
+pub const SUBTITLE_SSA: u8 = 1 << 3;
+
+/// Which sidecar subtitle files sit next to `media`. Symlinks are ignored.
+/// Bits are [`SUBTITLE_SRT`], [`SUBTITLE_VTT`], [`SUBTITLE_ASS`], [`SUBTITLE_SSA`].
+pub fn sidecar_subtitle_bits(media: &Path) -> u8 {
+	let mut bits = 0u8;
+	for (bit, ext) in [
+		(SUBTITLE_SRT, "srt"),
+		(SUBTITLE_VTT, "vtt"),
+		(SUBTITLE_ASS, "ass"),
+		(SUBTITLE_SSA, "ssa"),
+	] {
+		if is_regular_file(&media.with_extension(ext)) {
+			bits |= bit;
+		}
+	}
+	bits
+}
+
+fn is_regular_file(path: &Path) -> bool {
+	std::fs::symlink_metadata(path)
+		.ok()
+		.is_some_and(|meta| !meta.file_type().is_symlink() && meta.is_file())
+}
+
 pub fn probe_media(path: &Path) -> MediaInfo {
 	let ext = path
 		.extension()
@@ -168,6 +213,13 @@ pub fn probe_media(path: &Path) -> MediaInfo {
 
 /// `mkv_info_from_bytes` only inspects the first 256 KiB, so never read more.
 const MKV_PROBE_BYTES: u64 = 256 * 1024;
+
+/// WAVEFORMATEXTENSIBLE is 40 bytes. Anything larger is not a fmt chunk we
+/// need, and the size field is attacker-controlled.
+const MAX_WAV_FMT_BYTES: u32 = 1024;
+
+/// FLAC STREAMINFO is 34 bytes.
+const MAX_FLAC_STREAMINFO_BYTES: u32 = 64;
 
 /// Largest `moov` we are willing to load. Real ones are a few MiB at most;
 /// anything bigger is a corrupt header and not worth the memory.
@@ -232,6 +284,12 @@ pub fn has_embedded_art(_path: &Path) -> bool {
 
 fn duration_from_wav(path: &Path) -> std::io::Result<Option<Duration>> {
 	let mut f = std::fs::File::open(path)?;
+	wav_duration_from_reader(&mut f)
+}
+
+pub(crate) fn wav_duration_from_reader<R: Read + Seek>(
+	f: &mut R,
+) -> std::io::Result<Option<Duration>> {
 	let mut hdr = [0u8; 12];
 	f.read_exact(&mut hdr)?;
 	if &hdr[0..4] != b"RIFF" || &hdr[8..12] != b"WAVE" {
@@ -245,6 +303,10 @@ fn duration_from_wav(path: &Path) -> std::io::Result<Option<Duration>> {
 		}
 		let size = u32::from_le_bytes(chunk[4..8].try_into().unwrap());
 		if &chunk[0..4] == b"fmt " {
+			if size > MAX_WAV_FMT_BYTES {
+				f.seek(SeekFrom::Current(i64::from(size) + i64::from(size % 2)))?;
+				continue;
+			}
 			let mut fmt = vec![0u8; size as usize];
 			f.read_exact(&mut fmt)?;
 			if fmt.len() >= 16 {
@@ -267,6 +329,12 @@ fn duration_from_wav(path: &Path) -> std::io::Result<Option<Duration>> {
 
 fn duration_from_flac(path: &Path) -> std::io::Result<Option<Duration>> {
 	let mut f = std::fs::File::open(path)?;
+	flac_duration_from_reader(&mut f)
+}
+
+pub(crate) fn flac_duration_from_reader<R: Read + Seek>(
+	f: &mut R,
+) -> std::io::Result<Option<Duration>> {
 	let mut mag = [0u8; 4];
 	f.read_exact(&mut mag)?;
 	if &mag != b"fLaC" {
@@ -279,6 +347,9 @@ fn duration_from_flac(path: &Path) -> std::io::Result<Option<Duration>> {
 		let block_type = head[0] & 0x7f;
 		let len = u32::from_be_bytes([0, head[1], head[2], head[3]]);
 		if block_type == 0 {
+			if len > MAX_FLAC_STREAMINFO_BYTES {
+				return Ok(None);
+			}
 			let mut info = vec![0u8; len as usize];
 			f.read_exact(&mut info)?;
 			if info.len() < 18 {
@@ -811,6 +882,26 @@ mod tests {
 	}
 
 	#[test]
+	fn mismatched_audio_omits_the_profile() {
+		let ac3 = MediaInfo {
+			video_codec: Some(VideoCodec::Avc),
+			audio_codec: Some(AudioCodec::Ac3),
+			height: Some(1080),
+			..MediaInfo::default()
+		};
+		let aac = MediaInfo {
+			video_codec: Some(VideoCodec::Avc),
+			audio_codec: Some(AudioCodec::Aac),
+			height: Some(1080),
+			..MediaInfo::default()
+		};
+		assert_eq!(dlna_org_pn_for("mp4", &ac3), None);
+		assert_eq!(dlna_org_pn_for("mp4", &aac), Some("AVC_MP4_HP_HD_AAC"));
+		assert_eq!(dlna_org_pn_for("mkv", &aac), None);
+		assert_eq!(dlna_org_pn_for("mkv", &ac3), Some("AVC_MKV_HP_HD_AC3"));
+	}
+
+	#[test]
 	fn hevc_and_unknown_video_omit_pn() {
 		let hevc = MediaInfo {
 			video_codec: Some(VideoCodec::Hevc),
@@ -964,6 +1055,72 @@ mod tests {
 		let path = tmp.path().join("beep.wav");
 		fs::write(&path, tiny_wav(2)).unwrap();
 		assert_eq!(probe_duration(&path), Some(Duration::from_secs(2)));
+	}
+
+	/// Panics if a probe asks the reader for a multi-megabyte buffer.
+	struct SmallReads<R> {
+		inner: R,
+	}
+
+	impl<R: Read> Read for SmallReads<R> {
+		fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+			assert!(buf.len() <= 2048, "unbounded read of {} bytes", buf.len());
+			self.inner.read(buf)
+		}
+	}
+
+	impl<R: Seek> Seek for SmallReads<R> {
+		fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+			self.inner.seek(pos)
+		}
+	}
+
+	#[test]
+	fn wav_probe_does_not_allocate_a_huge_fmt_chunk() {
+		let mut data = Vec::new();
+		data.extend(b"RIFF");
+		data.extend(&36u32.to_le_bytes());
+		data.extend(b"WAVE");
+		data.extend(b"fmt ");
+		data.extend(&5_000_000u32.to_le_bytes());
+		let mut reader = SmallReads {
+			inner: std::io::Cursor::new(data),
+		};
+		assert_eq!(wav_duration_from_reader(&mut reader).unwrap(), None);
+	}
+
+	#[test]
+	fn flac_probe_does_not_allocate_a_huge_streaminfo() {
+		let mut data = Vec::new();
+		data.extend(b"fLaC");
+		// STREAMINFO (type 0), not last, 24-bit length 10_000.
+		let len = 10_000u32;
+		data.push(0);
+		data.push((len >> 16) as u8);
+		data.push((len >> 8) as u8);
+		data.push(len as u8);
+		let mut reader = SmallReads {
+			inner: std::io::Cursor::new(data),
+		};
+		assert_eq!(flac_duration_from_reader(&mut reader).unwrap(), None);
+	}
+
+	#[test]
+	fn sidecar_subtitle_bits_marks_regular_files_only() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = tmp.path().join("clip.mp4");
+		fs::write(&movie, b"x").unwrap();
+		fs::write(tmp.path().join("clip.srt"), b"1").unwrap();
+		fs::write(tmp.path().join("clip.ssa"), b"s").unwrap();
+		#[cfg(unix)]
+		std::os::unix::fs::symlink(tmp.path().join("clip.srt"), tmp.path().join("clip.vtt"))
+			.unwrap();
+		let bits = sidecar_subtitle_bits(&movie);
+		assert_eq!(bits & SUBTITLE_SRT, SUBTITLE_SRT);
+		assert_eq!(bits & SUBTITLE_SSA, SUBTITLE_SSA);
+		assert_eq!(bits & SUBTITLE_ASS, 0);
+		#[cfg(unix)]
+		assert_eq!(bits & SUBTITLE_VTT, 0);
 	}
 
 	#[test]
