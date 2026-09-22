@@ -9,8 +9,8 @@ use axum::{
 use dlna::FolderNode;
 use local_ip_address::local_ip;
 use spritz_core::{
-	album_art_sidecar, decode_rel_path, find_media, is_audio, media_url_path, open_media_file,
-	sort_media_paths, unique_canonical_roots, valid_http_host,
+	album_art_sidecar, decode_rel_path, find_media_with_progress, is_audio, media_url_path,
+	open_media_file, sort_media_paths, unique_canonical_roots, valid_http_host,
 };
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -45,12 +45,15 @@ pub async fn start_server(
 	let dirs = media_dirs.clone();
 	let indexed = tokio::task::spawn_blocking(move || {
 		let mut media_files = Vec::new();
+		let mut progress = ScanProgress::for_stdout();
 		for dir in &dirs {
-			match find_media(dir) {
+			let before = media_files.len();
+			match find_media_with_progress(dir, &mut |n| progress.update(before + n)) {
 				Ok(mut found) => media_files.append(&mut found),
 				Err(e) => tracing::warn!("could not scan {}: {e}", dir.display()),
 			}
 		}
+		progress.finish();
 		sort_media_paths(&mut media_files);
 
 		let records = describe_media(&media_files);
@@ -233,6 +236,63 @@ pub async fn bind_http(bind: IpAddr, port: u16) -> anyhow::Result<BoundHttp> {
 		ipv4: bind.is_ipv4(),
 		ipv6: bind.is_ipv6(),
 	})
+}
+
+/// Live `Scanning media files... (N)` line during the directory walk.
+/// Silent unless stdout is a terminal, so piped output stays one line per
+/// event. Redraws are throttled so a fast SSD scan does not spam the tty.
+struct ScanProgress<W: std::io::Write> {
+	out: Option<W>,
+	last_draw: Option<std::time::Instant>,
+	drawn: bool,
+}
+
+const SCAN_REDRAW_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
+impl ScanProgress<std::io::Stdout> {
+	fn for_stdout() -> Self {
+		use std::io::IsTerminal;
+		let stdout = std::io::stdout();
+		Self::new(stdout.is_terminal().then_some(stdout))
+	}
+}
+
+impl<W: std::io::Write> ScanProgress<W> {
+	fn new(out: Option<W>) -> Self {
+		Self {
+			out,
+			last_draw: None,
+			drawn: false,
+		}
+	}
+
+	fn update(&mut self, count: usize) {
+		let now = std::time::Instant::now();
+		if self
+			.last_draw
+			.is_some_and(|last| now.duration_since(last) < SCAN_REDRAW_EVERY)
+		{
+			return;
+		}
+		if let Some(out) = self.out.as_mut() {
+			let _ = write!(out, "\rScanning media files... ({count})");
+			let _ = out.flush();
+			self.drawn = true;
+		}
+		self.last_draw = Some(now);
+	}
+
+	/// Clear the progress line so the next `println!` starts on a clean line.
+	fn finish(&mut self) {
+		if !self.drawn {
+			return;
+		}
+		if let Some(out) = self.out.as_mut() {
+			let _ = write!(out, "\r\x1b[2K");
+			let _ = out.flush();
+		}
+		self.drawn = false;
+	}
 }
 
 struct FileRecord {
@@ -830,6 +890,33 @@ mod tests {
 		assert_eq!(friendly_name(""), "Spritz Media Server");
 		assert_eq!(friendly_name("  Living Room  "), "Living Room");
 		assert_eq!(friendly_name(&"x".repeat(80)).len(), 64);
+	}
+
+	#[test]
+	fn scan_progress_redraws_in_place_and_clears_the_line() {
+		let mut progress = ScanProgress::new(Some(Vec::new()));
+		progress.update(1);
+		progress.finish();
+		let out = String::from_utf8(progress.out.take().unwrap()).unwrap();
+		assert_eq!(out, "\rScanning media files... (1)\r\x1b[2K");
+	}
+
+	#[test]
+	fn scan_progress_throttles_redraws() {
+		let mut progress = ScanProgress::new(Some(Vec::new()));
+		progress.update(1);
+		progress.update(2);
+		progress.update(3);
+		let out = String::from_utf8(progress.out.take().unwrap()).unwrap();
+		assert_eq!(out.matches("Scanning").count(), 1, "{out:?}");
+	}
+
+	#[test]
+	fn scan_progress_is_silent_without_a_terminal() {
+		let mut progress: ScanProgress<Vec<u8>> = ScanProgress::new(None);
+		progress.update(5);
+		progress.finish();
+		assert!(!progress.drawn);
 	}
 
 	#[test]

@@ -33,6 +33,15 @@ fn is_junk_dir_name(name: &OsStr) -> bool {
 }
 
 pub fn find_media(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+	find_media_with_progress(dir, &mut |_| {})
+}
+
+/// [`find_media`] that calls `on_found` with the running count each time a
+/// media file is added, so a long scan can show progress.
+pub fn find_media_with_progress(
+	dir: &Path,
+	on_found: &mut dyn FnMut(usize),
+) -> anyhow::Result<Vec<PathBuf>> {
 	let mut found = Vec::new();
 	if !dir.is_dir() {
 		return Ok(found);
@@ -61,6 +70,7 @@ pub fn find_media(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
 			&& is_indexed_media(ext)
 		{
 			found.push(path);
+			on_found(found.len());
 		}
 	}
 	sort_media_paths(&mut found);
@@ -382,6 +392,21 @@ mod tests {
 
 		let found = find_media(tmp.path()).unwrap();
 		assert_eq!(names(&found), ["clip.mkv", "movie.mp4", "song.mp3"]);
+	}
+
+	#[test]
+	fn find_media_with_progress_reports_a_running_count() {
+		let tmp = tempfile::tempdir().unwrap();
+		fs::write(tmp.path().join("a.mp4"), b"x").unwrap();
+		fs::write(tmp.path().join("b.mp3"), b"x").unwrap();
+		fs::write(tmp.path().join("notes.txt"), b"x").unwrap();
+		fs::create_dir(tmp.path().join("sub")).unwrap();
+		fs::write(tmp.path().join("sub").join("c.mkv"), b"x").unwrap();
+
+		let mut seen = Vec::new();
+		let found = find_media_with_progress(tmp.path(), &mut |n| seen.push(n)).unwrap();
+		assert_eq!(found.len(), 3);
+		assert_eq!(seen, [1, 2, 3]);
 	}
 
 	#[test]
