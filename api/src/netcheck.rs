@@ -69,16 +69,22 @@ const TUNNEL_PREFIXES: [&str; 8] = [
 	"tailscale",
 ];
 
+// `true` if `name` is exactly `prefix` followed by zero or more ASCII
+// letters or digits: covers both a purely numeric suffix (`utun4`,
+// `bridge100`) and the alphanumeric ones some drivers assign (ZeroTier's
+// `ztc3q6pdsw`, Docker's `veth3a2b1c`).
+fn has_alnum_suffix(name: &str, prefix: &str) -> bool {
+	name.strip_prefix(prefix)
+		.is_some_and(|rest| rest.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 /// VPN and overlay interfaces.
 ///
 /// `utun*`, `ipsec*`, `ppp*`, `tun*`, `wg*`, `feth*` (`ZeroTier`, macOS),
 /// `zt*` (`ZeroTier`, Linux), `tailscale*` (Linux).
 #[must_use]
 pub fn is_tunnel(name: &str) -> bool {
-	TUNNEL_PREFIXES.iter().any(|p| {
-		name.strip_prefix(p)
-			.is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
-	})
+	TUNNEL_PREFIXES.iter().any(|p| has_alnum_suffix(name, p))
 }
 
 const VIRTUAL_PREFIXES: [&str; 7] = [
@@ -90,10 +96,7 @@ const VIRTUAL_PREFIXES: [&str; 7] = [
 // (VMware/UTM), `docker*`, `virbr*` (libvirt), `veth*`. Not `br*`: many
 // Linux distros use `br0` for the real LAN bridge.
 fn is_virtual(name: &str) -> bool {
-	VIRTUAL_PREFIXES.iter().any(|p| {
-		name.strip_prefix(p)
-			.is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
-	})
+	VIRTUAL_PREFIXES.iter().any(|p| has_alnum_suffix(name, p))
 }
 
 fn is_lan(i: &Iface) -> bool {
@@ -499,10 +502,11 @@ mod tests {
 			"feth1234",
 			"zt0",
 			"tailscale0",
+			"ztc3q6pdsw",
 		] {
 			assert!(is_tunnel(name), "{name}");
 		}
-		for name in ["en0", "bridge100", "awdl0", "llw0", "lo0", "br0"] {
+		for name in ["en0", "bridge100", "awdl0", "llw0", "lo0", "br0", "eth0"] {
 			assert!(!is_tunnel(name), "{name}");
 		}
 	}
@@ -517,10 +521,11 @@ mod tests {
 			"docker0",
 			"virbr0",
 			"veth1234",
+			"veth3a2b1c",
 		] {
 			assert!(is_virtual(name), "{name}");
 		}
-		for name in ["en0", "br0", "lo0", "utun4", "feth1234"] {
+		for name in ["en0", "br0", "lo0", "utun4", "feth1234", "eth0"] {
 			assert!(!is_virtual(name), "{name}");
 		}
 	}
