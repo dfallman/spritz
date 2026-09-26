@@ -22,6 +22,7 @@ use uuid::Uuid;
 
 pub mod bonjour;
 pub mod identity;
+pub mod netcheck;
 pub mod track;
 
 /// Shared HTTP state for the media, art, and M3U handlers.
