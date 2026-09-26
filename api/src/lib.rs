@@ -220,19 +220,26 @@ pub async fn start_server(
 		hostname.as_deref(),
 	) {
 		Ok(guard) => {
-			let shown =
-				match bonjour::settle(&guard.watch(), std::time::Duration::from_secs(2)).await {
-					bonjour::BonjourStatus::Registered(name) => name,
-					bonjour::BonjourStatus::Pending => friendly_name.clone(),
-					bonjour::BonjourStatus::Failed(e) => {
-						tracing::warn!("Bonjour: {e}");
-						friendly_name.clone()
-					}
-				};
-			println!(
-				"Bonjour: advertising \"{shown}\" as {}",
-				bonjour::SERVICE_TYPE
-			);
+			// Failure here only warns: `bonjour-failed` (from the check monitor
+			// below) already tells the user, and printing the requested name as
+			// if it were advertised would be misleading (spec §4.5/§4.6).
+			match bonjour::settle(&guard.watch(), std::time::Duration::from_secs(2)).await {
+				bonjour::BonjourStatus::Registered(name) => {
+					println!(
+						"Bonjour: advertising \"{name}\" as {}",
+						bonjour::SERVICE_TYPE
+					);
+				}
+				bonjour::BonjourStatus::Pending => {
+					println!(
+						"Bonjour: advertising \"{friendly_name}\" as {}",
+						bonjour::SERVICE_TYPE
+					);
+				}
+				bonjour::BonjourStatus::Failed(e) => {
+					tracing::warn!("Bonjour: {e}");
+				}
+			}
 			Some(guard)
 		}
 		Err(e) => {
@@ -266,21 +273,25 @@ pub async fn start_server(
 		}
 	});
 
-	tokio::select! {
+	let serve_result = tokio::select! {
 		result = serve_http(listener, app) => {
 			let _ = shutdown_tx.send(());
 			let _ = ssdp.await;
-			result?;
+			Some(result)
 		}
 		_ = wait_for_shutdown_signal() => {
 			tracing::info!("shutdown signal received");
 			let _ = shutdown_tx.send(());
 			let _ = ssdp.await;
+			None
 		}
-	}
+	};
 	check_task.abort();
 	report_task.abort();
 	drop(bonjour);
+	if let Some(result) = serve_result {
+		result?;
+	}
 	Ok(())
 }
 

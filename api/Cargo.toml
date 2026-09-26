@@ -27,6 +27,7 @@ if-addrs = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1.51.1", features = ["test-util"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 mdns-sd = "0.21.4"

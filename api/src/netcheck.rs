@@ -356,17 +356,28 @@ pub fn new_checks<'a>(before: &[Check], after: &'a [Check]) -> Vec<&'a Check> {
 /// `on_change(before, after)` runs whenever the list differs from the
 /// previous run, including the first run when it is non-empty. Must be
 /// called inside a tokio runtime.
+///
+/// `input` does blocking socket I/O (`getifaddrs`, a UDP send, and on macOS
+/// sometimes a TCP connect with up to a 1 s timeout), so each tick runs it on
+/// the blocking pool rather than the async worker a media stream may share.
+/// If that blocking task panics, that cycle is skipped and the monitor tries
+/// again at the next tick.
 pub fn spawn_monitor(
-	input: impl Fn() -> CheckInput + Send + 'static,
+	input: impl Fn() -> CheckInput + Send + Sync + 'static,
 	on_change: impl Fn(&[Check], &[Check]) + Send + 'static,
 ) -> (Arc<Mutex<Vec<Check>>>, tokio::task::JoinHandle<()>) {
 	let latest = Arc::new(Mutex::new(Vec::new()));
 	let shared = Arc::clone(&latest);
+	let input = Arc::new(input);
 	let task = tokio::spawn(async move {
 		let mut interval = tokio::time::interval(CHECK_PERIOD);
 		loop {
 			interval.tick().await;
-			let after = evaluate(&input());
+			let input = Arc::clone(&input);
+			let Ok(gathered) = tokio::task::spawn_blocking(move || input()).await else {
+				continue;
+			};
+			let after = evaluate(&gathered);
 			let before = std::mem::replace(
 				&mut *shared.lock().unwrap_or_else(PoisonError::into_inner),
 				after.clone(),
@@ -723,5 +734,63 @@ mod tests {
 		let after = [a.clone(), b.clone()];
 		assert_eq!(new_checks(&[a], &after), vec![&b]);
 		assert!(new_checks(&after, &after).is_empty());
+	}
+
+	type Transition = (Vec<Check>, Vec<Check>);
+
+	// Each tick's `input()` hops to the blocking pool and back: that round
+	// trip runs on a real OS thread, so give it a moment of real time to land
+	// before checking `seen`, on top of the cooperative yields that drive the
+	// paused-clock timer itself.
+	async fn settle() {
+		tokio::task::yield_now().await;
+		std::thread::sleep(std::time::Duration::from_millis(10));
+		tokio::task::yield_now().await;
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn spawn_monitor_reports_only_on_change() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		let healthy = || input(vec![iface("en0", "192.168.1.23", "255.255.255.0")]);
+		let denied = move || {
+			let mut i = healthy();
+			i.lan = LanProbe::Denied;
+			i
+		};
+
+		// Healthy, healthy, denied, denied, healthy, healthy: two transitions.
+		let call = Arc::new(AtomicUsize::new(0));
+		let seen: Arc<Mutex<Vec<Transition>>> = Arc::new(Mutex::new(Vec::new()));
+		let seen_writer = Arc::clone(&seen);
+
+		let (_latest, task) = spawn_monitor(
+			move || match call.fetch_add(1, Ordering::SeqCst) {
+				2 | 3 => denied(),
+				_ => healthy(),
+			},
+			move |before, after| {
+				seen_writer
+					.lock()
+					.unwrap_or_else(PoisonError::into_inner)
+					.push((before.to_vec(), after.to_vec()));
+			},
+		);
+
+		settle().await; // the interval's first tick fires immediately
+		for _ in 0..5 {
+			tokio::time::advance(CHECK_PERIOD).await;
+			settle().await;
+		}
+		task.abort();
+
+		let log = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
+		assert_eq!(log.len(), 2, "{log:?}");
+		// The first non-empty run: healthy -> denied.
+		assert!(log[0].0.is_empty());
+		assert_eq!(ids(&log[0].1), vec!["local-network-denied"]);
+		// Back to healthy: denied -> empty. No entry for the two repeats in between.
+		assert_eq!(ids(&log[1].0), vec!["local-network-denied"]);
+		assert!(log[1].1.is_empty());
 	}
 }
