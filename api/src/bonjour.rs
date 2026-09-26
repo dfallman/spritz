@@ -151,8 +151,8 @@ pub(crate) mod imp {
 	use std::ptr;
 	use std::sync::{Arc, Mutex, PoisonError};
 
-	pub(crate) type DnsServiceRef = *mut c_void;
-	pub(crate) type DispatchQueue = *mut c_void;
+	pub type DnsServiceRef = *mut c_void;
+	pub type DispatchQueue = *mut c_void;
 
 	type RegisterReply = extern "C" fn(
 		sd_ref: DnsServiceRef,
@@ -180,21 +180,15 @@ pub(crate) mod imp {
 			callback: Option<RegisterReply>,
 			context: *mut c_void,
 		) -> i32;
-		pub(crate) fn DNSServiceSetDispatchQueue(
-			sd_ref: DnsServiceRef,
-			queue: DispatchQueue,
-		) -> i32;
-		pub(crate) fn DNSServiceRefDeallocate(sd_ref: DnsServiceRef);
-		pub(crate) fn dispatch_queue_create(
-			label: *const c_char,
-			attr: *const c_void,
-		) -> DispatchQueue;
-		pub(crate) fn dispatch_sync_f(
+		pub fn DNSServiceSetDispatchQueue(sd_ref: DnsServiceRef, queue: DispatchQueue) -> i32;
+		pub fn DNSServiceRefDeallocate(sd_ref: DnsServiceRef);
+		pub fn dispatch_queue_create(label: *const c_char, attr: *const c_void) -> DispatchQueue;
+		pub fn dispatch_sync_f(
 			queue: DispatchQueue,
 			context: *mut c_void,
 			work: extern "C" fn(*mut c_void),
 		);
-		pub(crate) fn dispatch_release(object: *mut c_void);
+		pub fn dispatch_release(object: *mut c_void);
 	}
 
 	/// `kDNSServiceFlagsAdd`: set when the name is registered, clear when the
@@ -202,11 +196,7 @@ pub(crate) mod imp {
 	const FLAGS_ADD: u32 = 0x2;
 
 	/// What one register callback means for the status.
-	pub(crate) fn status_from_callback(
-		flags: u32,
-		error: i32,
-		name: Option<&str>,
-	) -> BonjourStatus {
+	pub fn status_from_callback(flags: u32, error: i32, name: Option<&str>) -> BonjourStatus {
 		if error != 0 {
 			return BonjourStatus::Failed(format!("mDNSResponder reported error {error}"));
 		}
@@ -233,11 +223,14 @@ pub(crate) mod imp {
 		// `register`; it is released only after the ref is deallocated on
 		// this same queue, so it is alive for every callback.
 		let status = unsafe { &*context.cast_const().cast::<Mutex<BonjourStatus>>() };
-		let name = if name.is_null() {
-			None
-		} else {
-			// SAFETY: dns_sd passes a NUL-terminated name valid for the call.
+		// dns_sd leaves the other arguments undefined when `error_code` is set,
+		// so the name is read only on success.
+		let name = if error_code == 0 && !name.is_null() {
+			// SAFETY: on success dns_sd passes a non-NULL, NUL-terminated name
+			// that is valid for the duration of this call.
 			Some(unsafe { CStr::from_ptr(name) }.to_string_lossy())
+		} else {
+			None
 		};
 		let next = status_from_callback(flags, error_code, name.as_deref());
 		*status.lock().unwrap_or_else(PoisonError::into_inner) = next;
@@ -275,12 +268,12 @@ pub(crate) mod imp {
 		}
 	}
 
-	pub(crate) fn new_queue() -> DispatchQueue {
+	pub fn new_queue() -> DispatchQueue {
 		// SAFETY: a static label and NULL attributes (a serial queue).
 		unsafe { dispatch_queue_create(c"org.spritz.bonjour".as_ptr(), ptr::null()) }
 	}
 
-	pub(crate) fn register(
+	pub fn register(
 		regtype: &str,
 		name: &str,
 		port: u16,
@@ -347,7 +340,7 @@ pub(crate) mod imp {
 
 	pub struct Registration;
 
-	pub(crate) fn register(
+	pub fn register(
 		_regtype: &str,
 		_name: &str,
 		_port: u16,
