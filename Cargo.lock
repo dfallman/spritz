@@ -75,6 +75,7 @@ dependencies = [
  "axum",
  "dlna",
  "hostname",
+ "if-addrs",
  "local-ip-address",
  "mdns-sd",
  "serde",
