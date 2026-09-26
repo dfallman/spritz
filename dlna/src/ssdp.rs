@@ -108,6 +108,7 @@ async fn handle_datagram(
 		Ok((len, src)) => {
 			let msg = std::str::from_utf8(&buf[..len]).unwrap_or("");
 			if msg.starts_with("M-SEARCH") && ssdp_source_allowed(src) {
+				note_search(msg, src, config);
 				respond_to_msearch(
 					msg,
 					src,
@@ -123,6 +124,18 @@ async fn handle_datagram(
 			tokio::time::sleep(Duration::from_millis(100)).await;
 		}
 	}
+}
+
+/// Remember a Spritz client's search so the server can later say whether it
+/// ever connected. Other agents are ignored by the tracker.
+fn note_search(msg: &str, src: SocketAddr, config: &DlnaConfig) {
+	let agent = header_value(msg, "USER-AGENT");
+	config.clients.record(
+		src.ip(),
+		crate::clients::Stage::Searched,
+		agent.as_deref(),
+		None,
+	);
 }
 
 fn spawn_alive(
@@ -734,6 +747,7 @@ mod tests {
 			audio_idx: vec![],
 			folder_nodes: vec![],
 			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
 		}
 	}
 
@@ -744,5 +758,27 @@ mod tests {
 		let loc = location_for_peer(peer, &config);
 		assert!(loc.contains("192.0.2.10"), "{loc}");
 		assert!(!loc.contains("2001:db8"), "{loc}");
+	}
+
+	#[test]
+	fn spritz_searches_are_recorded() {
+		let config = bare_config("192.168.1.2", true, false);
+		let src: SocketAddr = "192.168.1.40:50000".parse().unwrap();
+		note_search(
+			"M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:discover\"\r\nST: ssdp:all\r\nUSER-AGENT: tvOS UPnP/1.1 SpritzPlayer/1.0\r\n\r\n",
+			src,
+			&config,
+		);
+		let list = config.clients.snapshot();
+		assert_eq!(list.len(), 1);
+		assert!(list[0].searched.is_some());
+	}
+
+	#[test]
+	fn other_searches_are_not_recorded() {
+		let config = bare_config("192.168.1.2", true, false);
+		let src: SocketAddr = "192.168.1.41:50000".parse().unwrap();
+		note_search("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n\r\n", src, &config);
+		assert!(config.clients.snapshot().is_empty());
 	}
 }
