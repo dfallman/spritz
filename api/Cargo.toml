@@ -24,3 +24,6 @@ tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+mdns-sd = "0.21.4"
