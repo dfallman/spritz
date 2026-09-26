@@ -136,6 +136,7 @@ pub async fn start_server(
 		audio_idx,
 		folder_nodes,
 		event_hub: dlna::event::EventHub::default(),
+		clients: dlna::clients::ClientTracker::default(),
 	});
 
 	let state = Arc::new(AppState {
@@ -1079,6 +1080,7 @@ mod tests {
 			audio_idx: vec![],
 			folder_nodes: vec![],
 			event_hub: Default::default(),
+			clients: dlna::clients::ClientTracker::default(),
 		});
 		let app = Router::new().merge(dlna::router::<()>(config));
 		let server = tokio::spawn(serve_http(listener, app));
