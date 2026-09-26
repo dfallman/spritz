@@ -153,8 +153,10 @@ pub async fn start_server(
 		port,
 		hostname.clone(),
 	));
-	let addresses: identity::AddressSource =
-		Arc::new(move || netcheck::lan_addresses(&netcheck::interfaces(), ip));
+	let addresses: identity::AddressSource = match bound_addresses(bind) {
+		Some(fixed) => Arc::new(move || fixed.clone()),
+		None => Arc::new(move || netcheck::lan_addresses(&netcheck::interfaces(), ip)),
+	};
 
 	let state = Arc::new(AppState {
 		media_dirs,
@@ -211,7 +213,9 @@ pub async fn start_server(
 		format!(":{port}")
 	};
 	println!("Serving on http://{ip}{port_str}/spritz");
-	println!("DLNA: discoverable as \"{friendly_name}\" on the local network");
+	if ssdp_ok {
+		println!("DLNA: discoverable as \"{friendly_name}\" on the local network");
+	}
 
 	let bonjour = match bonjour::advertise(
 		&friendly_name,
@@ -543,6 +547,18 @@ pub fn advertised_ip(bind: IpAddr, discovered: Option<IpAddr>) -> IpAddr {
 		bind
 	} else {
 		discovered.unwrap_or_else(|| "127.0.0.1".parse().unwrap())
+	}
+}
+
+/// Identity `addresses` when `--bind` names one address: only that address
+/// is reachable, so it is the whole list (empty for an IPv6 address, since
+/// the list is IPv4). `None` for an unspecified bind, which serves every
+/// interface.
+fn bound_addresses(bind: IpAddr) -> Option<Vec<std::net::Ipv4Addr>> {
+	match bind {
+		_ if bind.is_unspecified() => None,
+		IpAddr::V4(v4) => Some(vec![v4]),
+		IpAddr::V6(v6) => Some(v6.to_ipv4_mapped().into_iter().collect()),
 	}
 }
 
@@ -981,6 +997,18 @@ mod tests {
 			advertised_ip("0.0.0.0".parse().unwrap(), Some(discovered)),
 			discovered
 		);
+	}
+
+	#[test]
+	fn a_specific_bind_fixes_the_identity_addresses() {
+		let v4 = |s: &str| s.parse::<std::net::Ipv4Addr>().unwrap();
+		assert_eq!(
+			bound_addresses("192.168.1.5".parse().unwrap()),
+			Some(vec![v4("192.168.1.5")])
+		);
+		assert_eq!(bound_addresses("fe80::1".parse().unwrap()), Some(vec![]));
+		assert_eq!(bound_addresses("0.0.0.0".parse().unwrap()), None);
+		assert_eq!(bound_addresses("::".parse().unwrap()), None);
 	}
 
 	#[test]
