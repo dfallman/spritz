@@ -246,12 +246,13 @@ pub fn evaluate(input: &CheckInput) -> Vec<Check> {
 	checks
 }
 
-/// Every IPv4 interface address on this machine.
+/// Every IPv4 address of an interface that is up on this machine.
 #[must_use]
 pub fn interfaces() -> Vec<Iface> {
 	if_addrs::get_if_addrs()
 		.unwrap_or_default()
 		.into_iter()
+		.filter(if_addrs::Interface::is_oper_up)
 		.filter_map(|i| match i.addr {
 			if_addrs::IfAddr::V4(v4) => Some(Iface {
 				name: i.name,
