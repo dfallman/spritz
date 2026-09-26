@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
 
+pub mod clients;
 pub mod content_dir;
 pub mod description;
 pub mod event;
