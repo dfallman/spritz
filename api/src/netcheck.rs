@@ -58,9 +58,21 @@ pub struct CheckInput {
 	pub lan: LanProbe,
 }
 
-const TUNNEL_PREFIXES: [&str; 5] = ["utun", "ipsec", "ppp", "tun", "wg"];
+const TUNNEL_PREFIXES: [&str; 8] = [
+	"utun",
+	"ipsec",
+	"ppp",
+	"tun",
+	"wg",
+	"feth",
+	"zt",
+	"tailscale",
+];
 
-/// `utun*`, `ipsec*`, `ppp*`, `tun*`, `wg*`: VPN and overlay interfaces.
+/// VPN and overlay interfaces.
+///
+/// `utun*`, `ipsec*`, `ppp*`, `tun*`, `wg*`, `feth*` (`ZeroTier`, macOS),
+/// `zt*` (`ZeroTier`, Linux), `tailscale*` (Linux).
 #[must_use]
 pub fn is_tunnel(name: &str) -> bool {
 	TUNNEL_PREFIXES.iter().any(|p| {
@@ -69,8 +81,27 @@ pub fn is_tunnel(name: &str) -> bool {
 	})
 }
 
+const VIRTUAL_PREFIXES: [&str; 7] = [
+	"bridge", "vnic", "vmnet", "vmenet", "docker", "virbr", "veth",
+];
+
+// VM and container host-only bridges, not real LAN segments: `bridge*`
+// (macOS Internet Sharing/VM), `vnic*` (Parallels), `vmnet*`/`vmenet*`
+// (VMware/UTM), `docker*`, `virbr*` (libvirt), `veth*`. Not `br*`: many
+// Linux distros use `br0` for the real LAN bridge.
+fn is_virtual(name: &str) -> bool {
+	VIRTUAL_PREFIXES.iter().any(|p| {
+		name.strip_prefix(p)
+			.is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+	})
+}
+
 fn is_lan(i: &Iface) -> bool {
-	!i.ip.is_loopback() && !i.ip.is_link_local() && !i.ip.is_unspecified() && !is_tunnel(&i.name)
+	!i.ip.is_loopback()
+		&& !i.ip.is_link_local()
+		&& !i.ip.is_unspecified()
+		&& !is_tunnel(&i.name)
+		&& !is_virtual(&i.name)
 }
 
 fn network(i: &Iface) -> (u32, u32) {
@@ -114,20 +145,25 @@ fn vpn_check(input: &CheckInput) -> Option<Check> {
 			),
 		});
 	}
-	let message = input.interfaces.iter().find(on).map_or_else(
-		|| {
-			format!(
-				"VPN interface {} is active; Spritz advertises {}.",
-				first.name, input.advertised
-			)
-		},
-		|lan| {
-			format!(
-				"VPN interface {} is active; Spritz advertises {} on {}.",
-				first.name, input.advertised, lan.name
-			)
-		},
-	);
+	let message = input
+		.interfaces
+		.iter()
+		.filter(|i| is_lan(i))
+		.find(on)
+		.map_or_else(
+			|| {
+				format!(
+					"VPN interface {} is active; Spritz advertises {}.",
+					first.name, input.advertised
+				)
+			},
+			|lan| {
+				format!(
+					"VPN interface {} is active; Spritz advertises {} on {}.",
+					first.name, input.advertised, lan.name
+				)
+			},
+		);
 	Some(Check {
 		id: "vpn-active",
 		severity: Severity::Info,
@@ -170,11 +206,29 @@ pub fn evaluate(input: &CheckInput) -> Vec<Check> {
 		});
 	}
 	checks.extend(vpn_check(input));
-	let mut networks: Vec<(u32, u32)> = lan.iter().map(|i| network(i)).collect();
-	networks.sort_unstable();
-	networks.dedup();
-	if networks.len() > 1 {
-		let list: Vec<String> = lan.iter().map(|i| format!("{} {}", i.name, i.ip)).collect();
+	let mut subnets: Vec<(u32, u32)> = lan.iter().map(|i| network(i)).collect();
+	subnets.sort_unstable();
+	subnets.dedup();
+	if subnets.len() > 1 {
+		let list: Vec<String> = subnets
+			.iter()
+			.map(|&(net, mask)| {
+				let mut names: Vec<&str> = lan
+					.iter()
+					.copied()
+					.filter(|i| network(i) == (net, mask))
+					.map(|i| i.name.as_str())
+					.collect();
+				names.sort_unstable();
+				names.dedup();
+				format!(
+					"{}/{} ({})",
+					Ipv4Addr::from(net),
+					mask.count_ones(),
+					names.join(", ")
+				)
+			})
+			.collect();
 		checks.push(Check {
 			id: "multiple-subnets",
 			severity: Severity::Info,
@@ -420,6 +474,7 @@ mod tests {
 	#[test]
 	fn a_tunnel_with_an_unknown_advertised_interface_is_still_a_note() {
 		let mut i = input(vec![
+			iface("lo0", "127.0.0.1", "255.0.0.0"),
 			iface("en0", "192.168.1.23", "255.255.255.0"),
 			iface("wg0", "10.9.0.1", "255.255.255.0"),
 		]);
@@ -427,19 +482,100 @@ mod tests {
 		let checks = evaluate(&i);
 		assert_eq!(checks[0].severity, Severity::Info);
 		assert_eq!(
-			checks[0].message,
-			"VPN interface wg0 is active; Spritz advertises 127.0.0.1."
+			checks[0].message, "VPN interface wg0 is active; Spritz advertises 127.0.0.1.",
+			"must not name lo0 as the LAN interface just because it matches the advertised address"
 		);
 	}
 
 	#[test]
 	fn tunnel_names() {
-		for name in ["utun0", "utun12", "ipsec0", "ppp0", "tun1", "wg0"] {
+		for name in [
+			"utun0",
+			"utun12",
+			"ipsec0",
+			"ppp0",
+			"tun1",
+			"wg0",
+			"feth1234",
+			"zt0",
+			"tailscale0",
+		] {
 			assert!(is_tunnel(name), "{name}");
 		}
-		for name in ["en0", "bridge100", "awdl0", "llw0", "lo0"] {
+		for name in ["en0", "bridge100", "awdl0", "llw0", "lo0", "br0"] {
 			assert!(!is_tunnel(name), "{name}");
 		}
+	}
+
+	#[test]
+	fn virtual_interface_names() {
+		for name in [
+			"bridge100",
+			"vnic0",
+			"vmnet1",
+			"vmenet0",
+			"docker0",
+			"virbr0",
+			"veth1234",
+		] {
+			assert!(is_virtual(name), "{name}");
+		}
+		for name in ["en0", "br0", "lo0", "utun4", "feth1234"] {
+			assert!(!is_virtual(name), "{name}");
+		}
+	}
+
+	#[test]
+	fn a_virtual_bridge_beside_the_lan_does_not_trigger_multiple_subnets() {
+		let mut i = input(vec![
+			iface("en0", "192.168.4.21", "255.255.252.0"),
+			iface("bridge100", "192.168.139.3", "255.255.254.0"),
+		]);
+		i.advertised = "192.168.4.21".parse().unwrap();
+		let checks = evaluate(&i);
+		assert!(checks.is_empty(), "{checks:?}");
+	}
+
+	#[test]
+	fn lan_addresses_exclude_virtual_bridges() {
+		let ifaces = vec![
+			iface("en0", "192.168.4.21", "255.255.252.0"),
+			iface("bridge100", "192.168.139.3", "255.255.254.0"),
+		];
+		let got = lan_addresses(&ifaces, "192.168.4.21".parse().unwrap());
+		assert_eq!(got, vec!["192.168.4.21".parse::<Ipv4Addr>().unwrap()]);
+	}
+
+	#[test]
+	fn a_zerotier_macos_interface_is_a_vpn_note_and_excluded_from_addresses() {
+		let ifaces = vec![
+			iface("en0", "192.168.1.23", "255.255.255.0"),
+			iface("feth1234", "10.147.1.2", "255.255.255.0"),
+		];
+		let checks = evaluate(&input(ifaces.clone()));
+		assert_eq!(ids(&checks), vec!["vpn-active"]);
+		assert_eq!(checks[0].severity, Severity::Info);
+		let addrs = lan_addresses(&ifaces, "192.168.1.23".parse().unwrap());
+		assert_eq!(addrs, vec!["192.168.1.23".parse::<Ipv4Addr>().unwrap()]);
+	}
+
+	#[test]
+	fn br0_still_counts_as_lan() {
+		let ifaces = vec![iface("br0", "192.168.1.23", "255.255.255.0")];
+		assert!(evaluate(&input(ifaces.clone())).is_empty());
+		assert_eq!(
+			lan_addresses(&ifaces, "192.168.1.23".parse().unwrap()),
+			vec!["192.168.1.23".parse::<Ipv4Addr>().unwrap()]
+		);
+	}
+
+	#[test]
+	fn two_interfaces_on_a_wide_shared_subnet_are_one_network() {
+		let checks = evaluate(&input(vec![
+			iface("en0", "192.168.4.21", "255.255.252.0"),
+			iface("en7", "192.168.4.32", "255.255.252.0"),
+		]));
+		assert!(checks.is_empty(), "{checks:?}");
 	}
 
 	#[test]
@@ -450,8 +586,8 @@ mod tests {
 		]));
 		assert_eq!(ids(&checks), vec!["multiple-subnets"]);
 		assert_eq!(checks[0].severity, Severity::Info);
-		assert!(checks[0].message.contains("en0 192.168.1.23"));
-		assert!(checks[0].message.contains("en7 10.0.0.5"));
+		assert!(checks[0].message.contains("192.168.1.0/24 (en0)"));
+		assert!(checks[0].message.contains("10.0.0.0/24 (en7)"));
 		assert!(checks[0].message.contains("192.168.1.23"));
 	}
 
