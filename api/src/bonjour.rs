@@ -336,19 +336,49 @@ pub(crate) mod imp {
 #[cfg(not(target_os = "macos"))]
 pub(crate) mod imp {
 	use super::BonjourStatus;
-	use std::sync::{Arc, Mutex};
+	use mdns_sd::{ServiceDaemon, ServiceInfo};
+	use std::sync::{Arc, Mutex, PoisonError};
 
-	pub struct Registration;
+	pub struct Registration {
+		daemon: ServiceDaemon,
+		fullname: String,
+	}
+
+	impl Drop for Registration {
+		fn drop(&mut self) {
+			if let Ok(done) = self.daemon.unregister(&self.fullname) {
+				let _ = done.recv_timeout(std::time::Duration::from_secs(1));
+			}
+			let _ = self.daemon.shutdown();
+		}
+	}
 
 	pub fn register(
-		_regtype: &str,
-		_name: &str,
-		_port: u16,
-		_pairs: &[(&'static str, String)],
-		_hostname: Option<&str>,
-		_status: Arc<Mutex<BonjourStatus>>,
+		regtype: &str,
+		name: &str,
+		port: u16,
+		pairs: &[(&'static str, String)],
+		hostname: Option<&str>,
+		status: Arc<Mutex<BonjourStatus>>,
 	) -> anyhow::Result<Registration> {
-		anyhow::bail!("Bonjour is not implemented on this platform yet")
+		let host = hostname.unwrap_or("spritz.local");
+		let host = format!("{}.", host.trim_end_matches('.'));
+		let props: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+		let daemon = ServiceDaemon::new()?;
+		let info = ServiceInfo::new(
+			&format!("{regtype}.local."),
+			name,
+			&host,
+			"",
+			port,
+			&props[..],
+		)?
+		.enable_addr_auto();
+		let fullname = info.get_fullname().to_string();
+		daemon.register(info)?;
+		*status.lock().unwrap_or_else(PoisonError::into_inner) =
+			BonjourStatus::Registered(name.to_string());
+		Ok(Registration { daemon, fullname })
 	}
 }
 
