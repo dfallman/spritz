@@ -58,8 +58,13 @@ fn invisible(c: char) -> bool {
 			'\u{200b}'..='\u{200f}'
 				| '\u{202a}'..='\u{202e}'
 				| '\u{2060}'..='\u{2069}'
+				| '\u{061c}'
+				| '\u{180e}'
+				| '\u{2028}'
+				| '\u{2029}'
 				| '\u{feff}'
 				| '\u{fff9}'..='\u{fffb}'
+				| '\u{e0000}'..='\u{e007f}'
 		)
 }
 
@@ -85,7 +90,9 @@ pub(crate) fn is_spritz_token(token: &str) -> bool {
 	let Some(suffix) = name.strip_prefix("Spritz") else {
 		return false;
 	};
-	!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_alphabetic()) && !version.is_empty()
+	!suffix.is_empty()
+		&& suffix.chars().all(|c| c.is_ascii_alphabetic())
+		&& version.starts_with(|c: char| c.is_ascii_digit())
 }
 
 /// Parse either spritz form, `<os> UPnP/1.1 SpritzPlayer/<v>` (SSDP) or
@@ -140,6 +147,11 @@ pub struct ClientRecord {
 	pub found: Option<Instant>,
 	pub browsed: Option<Instant>,
 	pub streamed: Option<Instant>,
+	/// The first search with no HTTP stage within [`SEARCH_GRACE`] before
+	/// it; cleared by any HTTP stage. Keying the diagnosis on this rather
+	/// than the latest search keeps it steady for a client that keeps
+	/// searching.
+	pub unanswered_since: Option<Instant>,
 	/// Made at least one HTTP request.
 	pub http: bool,
 }
@@ -214,6 +226,7 @@ pub(crate) const fn blank(ip: IpAddr, now: Instant) -> ClientRecord {
 		found: None,
 		browsed: None,
 		streamed: None,
+		unanswered_since: None,
 		http: false,
 	}
 }
@@ -260,6 +273,15 @@ impl ClientTracker {
 			record.device_name = name;
 		}
 		record.last_seen = now;
+		if stage == Stage::Searched {
+			let cutoff = now.checked_sub(SEARCH_GRACE).unwrap_or(now);
+			let answered = record.last_http().is_some_and(|t| t >= cutoff);
+			if record.unanswered_since.is_none() && !answered {
+				record.unanswered_since = Some(now);
+			}
+		} else {
+			record.unanswered_since = None;
+		}
 		match stage {
 			Stage::Searched => record.searched = Some(now),
 			Stage::Found => record.found = Some(now),
@@ -303,15 +325,20 @@ pub(crate) fn evict(map: &mut HashMap<IpAddr, ClientRecord>) {
 }
 
 /// One sentence explaining where `record` got stuck, or `None`.
+///
+/// Only Spritz clients are diagnosed: other peers are tracked once they
+/// connected, and TVs send routine searches without reconnecting. The
+/// diagnosis runs from [`STUCK_AFTER`] past the first unanswered search
+/// until the latest search is older than [`DIAGNOSIS_WINDOW`], so a client
+/// that keeps searching gets one steady diagnosis.
 #[must_use]
 pub fn diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Option<String> {
-	let searched = record.searched?;
-	let age = now.saturating_duration_since(searched);
-	if age < STUCK_AFTER || age > DIAGNOSIS_WINDOW {
+	if !record.agent.spritz {
 		return None;
 	}
-	let cutoff = searched.checked_sub(SEARCH_GRACE).unwrap_or(searched);
-	if record.last_http().is_some_and(|t| t >= cutoff) {
+	let stuck = now.saturating_duration_since(record.unanswered_since?);
+	let searched = now.saturating_duration_since(record.searched?);
+	if stuck < STUCK_AFTER || searched > DIAGNOSIS_WINDOW {
 		return None;
 	}
 	Some(format!(
@@ -345,6 +372,25 @@ mod tests {
 			Some("Kitchen")
 		);
 		assert_eq!(sanitize("  Den \n").as_deref(), Some("Den"));
+	}
+
+	#[test]
+	fn sanitize_strips_other_invisible_characters() {
+		for c in [
+			'\u{061c}',
+			'\u{2028}',
+			'\u{2029}',
+			'\u{180e}',
+			'\u{e0000}',
+			'\u{e0041}',
+			'\u{e007f}',
+		] {
+			assert_eq!(
+				sanitize(&format!("Den{c}Room")).as_deref(),
+				Some("DenRoom"),
+				"{c:?}"
+			);
+		}
 	}
 
 	#[test]
@@ -402,6 +448,8 @@ mod tests {
 		for ua in [
 			"Spritz/1.0",
 			"SpritzPlayer/",
+			"SpritzPlayer/\u{200b}",
+			"SpritzPlayer/beta",
 			"Spritz2/1.0",
 			"xSpritzPlayer/1.0",
 			"",
@@ -771,5 +819,88 @@ mod tests {
 				.unwrap()
 				.starts_with("Apple TV (tvOS 26.0) searched")
 		);
+	}
+
+	fn search_at(t: &ClientTracker, at: Instant) {
+		t.record_at(
+			at,
+			ip("192.168.1.40"),
+			Stage::Searched,
+			Some(PLAYER_SSDP),
+			None,
+		);
+	}
+
+	fn diagnosed_at(t: &ClientTracker, now: Instant) -> bool {
+		diagnosis(&t.snapshot_at(now).remove(0), now, 8080).is_some()
+	}
+
+	/// Searches every `every` seconds for five minutes, checking each second.
+	fn polling(every: u64) -> Vec<bool> {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		(0..=300)
+			.map(|s| {
+				let now = start + Duration::from_secs(s);
+				if s % every == 0 {
+					search_at(&t, now);
+				}
+				diagnosed_at(&t, now)
+			})
+			.collect()
+	}
+
+	#[test]
+	fn a_player_polling_every_30s_stays_diagnosed() {
+		let seen = polling(30);
+		assert!(seen[..15].iter().all(|d| !d), "{seen:?}");
+		assert!(seen[15..].iter().all(|d| *d), "{seen:?}");
+	}
+
+	#[test]
+	fn a_player_searching_every_10s_is_diagnosed() {
+		let seen = polling(10);
+		assert!(seen[..15].iter().all(|d| !d), "{seen:?}");
+		assert!(seen[15..].iter().all(|d| *d), "{seen:?}");
+	}
+
+	#[test]
+	fn an_http_stage_clears_the_unanswered_search() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		search_at(&t, start);
+		assert!(diagnosed_at(&t, start + Duration::from_secs(20)));
+		t.record_at(
+			start + Duration::from_secs(25),
+			ip("192.168.1.40"),
+			Stage::Found,
+			Some(PLAYER_HTTP),
+			None,
+		);
+		assert_eq!(t.snapshot_at(start).remove(0).unanswered_since, None);
+		assert!(!diagnosed_at(&t, start + Duration::from_secs(26)));
+		// The next search falls inside the grace after that connection.
+		search_at(&t, start + Duration::from_secs(30));
+		assert!(!diagnosed_at(&t, start + Duration::from_mins(1)));
+	}
+
+	#[test]
+	fn only_spritz_clients_are_diagnosed() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		let tv = ip("192.168.1.50");
+		t.record_at(
+			start,
+			tv,
+			Stage::Browsed,
+			Some("SEC_HHP_[TV] Samsung/1.0"),
+			None,
+		);
+		let search = start + Duration::from_mins(10);
+		t.record_at(search, tv, Stage::Searched, Some("Samsung/1.0"), None);
+		let now = search + Duration::from_secs(20);
+		let r = t.snapshot_at(now).remove(0);
+		assert!(r.unanswered_since.is_some());
+		assert_eq!(diagnosis(&r, now, 8080), None);
 	}
 }

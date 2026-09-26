@@ -135,6 +135,33 @@ mod tests {
 	}
 
 	#[test]
+	fn a_player_that_keeps_searching_is_diagnosed_once() {
+		let t = ClientTracker::default();
+		let mut r = ClientReporter::default();
+		let start = std::time::Instant::now();
+		let ip = "192.168.1.40".parse().unwrap();
+		let mut diagnoses = 0;
+		for s in 0..=300 {
+			let now = start + Duration::from_secs(s);
+			if s % 30 == 0 {
+				t.record_at(
+					now,
+					ip,
+					Stage::Searched,
+					Some("tvOS UPnP/1.1 SpritzPlayer/1.0"),
+					None,
+				);
+			}
+			diagnoses += r
+				.lines(&t.snapshot_at(now), now, 8080)
+				.iter()
+				.filter(|l| l.contains("never connected"))
+				.count();
+		}
+		assert_eq!(diagnoses, 1);
+	}
+
+	#[test]
 	fn check_lines_carry_the_severity() {
 		let c = |severity| Check {
 			id: "x",
