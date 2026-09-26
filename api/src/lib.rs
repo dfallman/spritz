@@ -554,7 +554,11 @@ pub fn advertised_ip(bind: IpAddr, discovered: Option<IpAddr>) -> IpAddr {
 /// is reachable, so it is the whole list (empty for an IPv6 address, since
 /// the list is IPv4). `None` for an unspecified bind, which serves every
 /// interface.
-fn bound_addresses(bind: IpAddr) -> Option<Vec<std::net::Ipv4Addr>> {
+///
+/// Public so an embedder composing its own server (rather than calling
+/// `start_server`) can honour a specific `--bind` the same way, instead of
+/// re-deriving this logic and risking drift.
+pub fn bound_addresses(bind: IpAddr) -> Option<Vec<std::net::Ipv4Addr>> {
 	match bind {
 		_ if bind.is_unspecified() => None,
 		IpAddr::V4(v4) => Some(vec![v4]),
