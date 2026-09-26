@@ -20,6 +20,8 @@ use std::sync::Arc;
 use tower_http::set_header::SetResponseHeaderLayer;
 use uuid::Uuid;
 
+pub mod bonjour;
+
 /// Shared HTTP state for the media, art, and M3U handlers.
 #[derive(Clone)]
 pub struct AppState {
