@@ -353,6 +353,9 @@ pub(crate) mod imp {
 		}
 	}
 
+	// Same signature as the macOS `register`, which hands `status` to the
+	// dns_sd callback and so needs it by value; `advertise` calls either.
+	#[allow(clippy::needless_pass_by_value)]
 	pub fn register(
 		regtype: &str,
 		name: &str,
