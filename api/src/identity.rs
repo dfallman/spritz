@@ -124,7 +124,9 @@ mod macos {
 	/// The Bonjour name from System Settings › General › Sharing, without `.local`.
 	pub fn local_host_name() -> Option<String> {
 		// SAFETY: a NULL store is allowed; the returned string is owned by us
-		// and released below; the buffer outlives the call.
+		// and released below; the buffer outlives the call. CF leaves `buf`
+		// unspecified when `CFStringGetCString` fails, so it must not be read
+		// (via `CStr::from_ptr`) unless `ok` is true.
 		unsafe {
 			let s = SCDynamicStoreCopyLocalHostName(std::ptr::null());
 			if s.is_null() {
@@ -133,8 +135,11 @@ mod macos {
 			let mut buf = [0 as c_char; 256];
 			let ok = CFStringGetCString(s, buf.as_mut_ptr(), 256, CF_STRING_ENCODING_UTF8) != 0;
 			CFRelease(s);
+			if !ok {
+				return None;
+			}
 			let name = CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned();
-			(ok && !name.is_empty()).then_some(name)
+			(!name.is_empty()).then_some(name)
 		}
 	}
 }
