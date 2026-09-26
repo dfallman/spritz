@@ -127,8 +127,12 @@ async fn handle_datagram(
 }
 
 /// Remember a Spritz client's search so the server can later say whether it
-/// ever connected. Other agents are ignored by the tracker.
+/// ever connected. Other agents are ignored by the tracker, and so are
+/// searches this server would not answer.
 fn note_search(msg: &str, src: SocketAddr, config: &DlnaConfig) {
+	if answered_target(msg, &config.device_uuid).is_none() {
+		return;
+	}
 	let agent = header_value(msg, "USER-AGENT");
 	config.clients.record(
 		src.ip(),
@@ -324,6 +328,13 @@ fn st_is_relevant(st: &str, uuid: &str) -> bool {
 	st == "ssdp:all" || nt_usn_pairs(uuid).iter().any(|(nt, _)| st == nt)
 }
 
+/// The M-SEARCH's ST when this server answers it: a relevant target and
+/// `MAN: "ssdp:discover"`.
+fn answered_target(msg: &str, uuid: &str) -> Option<String> {
+	let st = header_value(msg, "ST").unwrap_or_default();
+	(st_is_relevant(&st, uuid) && man_is_discover(msg)).then_some(st)
+}
+
 /// UPnP 1.0 §1.2.3: MX is a client-requested delay cap, 1–5 seconds.
 /// Missing/garbage → 0 (respond immediately). Values above 5 are clamped.
 fn parse_mx(msg: &str) -> u64 {
@@ -389,10 +400,9 @@ fn respond_to_msearch(
 	config: Arc<DlnaConfig>,
 	slots: Arc<Semaphore>,
 ) {
-	let st = header_value(msg, "ST").unwrap_or_default();
-	if !st_is_relevant(&st, &config.device_uuid) || !man_is_discover(msg) {
+	let Some(st) = answered_target(msg, &config.device_uuid) else {
 		return;
-	}
+	};
 	let Ok(permit) = slots.try_acquire_owned() else {
 		tracing::debug!("SSDP: dropping M-SEARCH, too many in flight");
 		return;
@@ -775,10 +785,30 @@ mod tests {
 	}
 
 	#[test]
+	fn searches_this_server_would_not_answer_are_not_recorded() {
+		let config = bare_config("192.168.1.2", true, false);
+		let src: SocketAddr = "192.168.1.40:50000".parse().unwrap();
+		let ua = "USER-AGENT: tvOS UPnP/1.1 SpritzPlayer/1.0\r\n";
+		for msg in [
+			format!(
+				"M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:discover\"\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n{ua}\r\n"
+			),
+			format!("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n{ua}\r\n"),
+		] {
+			note_search(&msg, src, &config);
+		}
+		assert!(config.clients.snapshot().is_empty());
+	}
+
+	#[test]
 	fn other_searches_are_not_recorded() {
 		let config = bare_config("192.168.1.2", true, false);
 		let src: SocketAddr = "192.168.1.41:50000".parse().unwrap();
-		note_search("M-SEARCH * HTTP/1.1\r\nST: ssdp:all\r\n\r\n", src, &config);
+		note_search(
+			"M-SEARCH * HTTP/1.1\r\nMAN: \"ssdp:discover\"\r\nST: ssdp:all\r\n\r\n",
+			src,
+			&config,
+		);
 		assert!(config.clients.snapshot().is_empty());
 	}
 }
