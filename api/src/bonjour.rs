@@ -54,7 +54,8 @@ pub fn instance_name(friendly: &str) -> String {
 /// Where a registration stands.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BonjourStatus {
-	/// Submitted; the responder has not answered yet.
+	/// Submitted and not confirmed yet: the responder has not answered, or it
+	/// withdrew the name after a conflict and the renamed one is still pending.
 	Pending,
 	/// Registered under this instance name (the responder may have renamed it).
 	Registered(String),
@@ -64,6 +65,9 @@ pub enum BonjourStatus {
 
 /// A cloneable view of a registration's status, for code that must not own
 /// the guard (the check monitor, the CLI's status line).
+///
+/// The status can change after [`settle`]: mDNSResponder may rename an
+/// existing registration on a later conflict, so read it live rather than once.
 #[derive(Clone)]
 pub struct BonjourWatch(Arc<Mutex<BonjourStatus>>);
 
@@ -97,6 +101,8 @@ pub struct BonjourGuard {
 
 impl BonjourGuard {
 	/// The responder's latest answer: pending, the registered name, or an error.
+	/// It can change at any time (a later conflict renames the service), so
+	/// read it live rather than once.
 	#[must_use]
 	pub fn status(&self) -> BonjourStatus {
 		self.watch().status()
@@ -191,10 +197,32 @@ pub(crate) mod imp {
 		pub(crate) fn dispatch_release(object: *mut c_void);
 	}
 
+	/// `kDNSServiceFlagsAdd`: set when the name is registered, clear when the
+	/// responder has withdrawn it (a conflict; a renamed Add follows).
+	const FLAGS_ADD: u32 = 0x2;
+
+	/// What one register callback means for the status.
+	pub(crate) fn status_from_callback(
+		flags: u32,
+		error: i32,
+		name: Option<&str>,
+	) -> BonjourStatus {
+		if error != 0 {
+			return BonjourStatus::Failed(format!("mDNSResponder reported error {error}"));
+		}
+		if flags & FLAGS_ADD == 0 {
+			return BonjourStatus::Pending;
+		}
+		name.map_or_else(
+			|| BonjourStatus::Failed("mDNSResponder registered without a name".into()),
+			|name| BonjourStatus::Registered(name.to_string()),
+		)
+	}
+
 	/// Runs on the registration's queue whenever the responder answers.
 	extern "C" fn on_register(
 		_sd_ref: DnsServiceRef,
-		_flags: u32,
+		flags: u32,
 		error_code: i32,
 		name: *const c_char,
 		_regtype: *const c_char,
@@ -205,13 +233,13 @@ pub(crate) mod imp {
 		// `register`; it is released only after the ref is deallocated on
 		// this same queue, so it is alive for every callback.
 		let status = unsafe { &*context.cast_const().cast::<Mutex<BonjourStatus>>() };
-		let next = if error_code == 0 && !name.is_null() {
-			// SAFETY: dns_sd passes a NUL-terminated name valid for the call.
-			let name = unsafe { CStr::from_ptr(name) };
-			BonjourStatus::Registered(name.to_string_lossy().into_owned())
+		let name = if name.is_null() {
+			None
 		} else {
-			BonjourStatus::Failed(format!("mDNSResponder reported error {error_code}"))
+			// SAFETY: dns_sd passes a NUL-terminated name valid for the call.
+			Some(unsafe { CStr::from_ptr(name) }.to_string_lossy())
 		};
+		let next = status_from_callback(flags, error_code, name.as_deref());
 		*status.lock().unwrap_or_else(PoisonError::into_inner) = next;
 	}
 
@@ -429,8 +457,39 @@ mod tests {
 	}
 
 	#[cfg(target_os = "macos")]
+	#[test]
+	fn callbacks_map_to_status() {
+		use imp::status_from_callback;
+		assert_eq!(
+			status_from_callback(0x2, 0, Some("Mini (2)")),
+			BonjourStatus::Registered("Mini (2)".into())
+		);
+		// Add cleared: the name was lost to a conflict; the renamed Add follows.
+		assert_eq!(
+			status_from_callback(0, 0, Some("Mini")),
+			BonjourStatus::Pending
+		);
+		assert_eq!(
+			status_from_callback(0x2, -65548, Some("Mini")),
+			BonjourStatus::Failed("mDNSResponder reported error -65548".into())
+		);
+		assert_eq!(
+			status_from_callback(0, -65548, None),
+			BonjourStatus::Failed("mDNSResponder reported error -65548".into())
+		);
+		assert!(matches!(
+			status_from_callback(0x2, 0, None),
+			BonjourStatus::Failed(_)
+		));
+	}
+
+	#[cfg(target_os = "macos")]
 	#[tokio::test]
 	#[ignore = "needs mDNSResponder; run by hand in spike S1"]
+	// mDNSResponder picks which of two same-named registrations gets renamed
+	// (spike S1: it looks like the higher SRV port wins). The second one uses
+	// the lower port here, so it is the one renamed; swap the ports and this
+	// test becomes flaky.
 	async fn a_conflict_is_renamed_and_reported() {
 		let first = advertise("Spritz S1 Twin", 8096, "uuid:a", None).unwrap();
 		settle(&first.watch(), Duration::from_secs(3)).await;
