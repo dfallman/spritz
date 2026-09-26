@@ -739,14 +739,19 @@ mod tests {
 
 	type Transition = (Vec<Check>, Vec<Check>);
 
-	// Each tick's `input()` hops to the blocking pool and back: that round
-	// trip runs on a real OS thread, so give it a moment of real time to land
-	// before checking `seen`, on top of the cooperative yields that drive the
-	// paused-clock timer itself.
-	async fn settle() {
-		tokio::task::yield_now().await;
-		std::thread::sleep(std::time::Duration::from_millis(10));
-		tokio::task::yield_now().await;
+	/// Wait until `input()` has been called `n` times. Each call runs on the
+	/// blocking pool, a real OS thread the paused clock does not drive, so
+	/// poll in real time (bounded) and yield so the monitor task can run.
+	async fn wait_for_calls(calls: &std::sync::atomic::AtomicUsize, n: usize) {
+		let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+		while calls.load(std::sync::atomic::Ordering::SeqCst) < n {
+			assert!(
+				std::time::Instant::now() < deadline,
+				"input() was not called {n} times"
+			);
+			tokio::task::yield_now().await;
+			std::thread::sleep(std::time::Duration::from_millis(1));
+		}
 	}
 
 	#[tokio::test(start_paused = true)]
@@ -761,12 +766,13 @@ mod tests {
 		};
 
 		// Healthy, healthy, denied, denied, healthy, healthy: two transitions.
-		let call = Arc::new(AtomicUsize::new(0));
+		let calls = Arc::new(AtomicUsize::new(0));
+		let counter = Arc::clone(&calls);
 		let seen: Arc<Mutex<Vec<Transition>>> = Arc::new(Mutex::new(Vec::new()));
 		let seen_writer = Arc::clone(&seen);
 
 		let (_latest, task) = spawn_monitor(
-			move || match call.fetch_add(1, Ordering::SeqCst) {
+			move || match counter.fetch_add(1, Ordering::SeqCst) {
 				2 | 3 => denied(),
 				_ => healthy(),
 			},
@@ -778,11 +784,15 @@ mod tests {
 			},
 		);
 
-		settle().await; // the interval's first tick fires immediately
-		for _ in 0..5 {
+		wait_for_calls(&calls, 1).await; // the interval's first tick fires immediately
+		for n in 2..=6 {
 			tokio::time::advance(CHECK_PERIOD).await;
-			settle().await;
+			wait_for_calls(&calls, n).await;
 		}
+		// The loop is sequential: a seventh call proves the sixth result was
+		// compared and reported before the log is read.
+		tokio::time::advance(CHECK_PERIOD).await;
+		wait_for_calls(&calls, 7).await;
 		task.abort();
 
 		let log = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
