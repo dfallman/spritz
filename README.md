@@ -146,7 +146,7 @@ not get through:
       Client: Apple TV (tvOS 26.0) at 192.168.1.40 found this server
       Client 192.168.1.41: tvOS searched for this server but never connected. Check the firewall on this Mac (port 8080).
 
-The full protocol is in `docs/spritz-protocol.md`.
+The full protocol is in [PROTOCOL.md](PROTOCOL.md).
 
 ## Smart TVs, game consoles, or media players (DLNA)
 Open your TV's Media Server or Network source. Spritz should show up within a few seconds. Inside, you'll see three containers — `Videos`, `Music`, and `By folder`. The first two are flat lists of every file by type; `By folder` mirrors your on-disk directory structure so you can navigate Shows → Season 1 → ep1.mkv the way you'd expect.
