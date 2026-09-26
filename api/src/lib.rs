@@ -122,6 +122,7 @@ pub async fn start_server(
 	let ip = advertised_ip(bind, local_ip().ok());
 	let friendly_name = friendly_name(name);
 
+	let clients = dlna::clients::ClientTracker::default();
 	let dlna_config = Arc::new(dlna::DlnaConfig {
 		device_uuid: stable_device_uuid(),
 		friendly_name: friendly_name.clone(),
@@ -140,8 +141,20 @@ pub async fn start_server(
 		audio_idx,
 		folder_nodes,
 		event_hub: dlna::event::EventHub::default(),
-		clients: dlna::clients::ClientTracker::default(),
+		clients: clients.clone(),
 	});
+
+	let hostname = identity::local_hostname();
+	let server_identity = Arc::new(identity::ServerIdentity::new(
+		"spritz",
+		env!("CARGO_PKG_VERSION"),
+		&friendly_name,
+		&dlna_config.device_uuid,
+		port,
+		hostname.clone(),
+	));
+	let addresses: identity::AddressSource =
+		Arc::new(move || netcheck::lan_addresses(&netcheck::interfaces(), ip));
 
 	let state = Arc::new(AppState {
 		media_dirs,
@@ -173,13 +186,24 @@ pub async fn start_server(
 		.route("/art/{idx}", get(serve_art).head(serve_art))
 		.merge(media_routes)
 		.merge(dlna::router(Arc::clone(&dlna_config)))
+		.merge(identity::router(
+			Arc::clone(&server_identity),
+			Arc::clone(&addresses),
+		))
 		.layer(middleware::from_fn(access_log))
+		.layer(middleware::from_fn_with_state(
+			clients.clone(),
+			track::track_clients,
+		))
 		.with_state(Arc::clone(&state));
 
 	// Bind happened before the scan so a busy port fails fast. HTTP and SSDP
 	// start with empty duration and resolution; `spawn_probe` fills those in.
 	let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 	let ssdp = tokio::spawn(dlna::run_ssdp(Arc::clone(&dlna_config), shutdown_rx));
+	// run_ssdp returns at once when UDP 1900 is taken; give that a moment to show.
+	tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+	let ssdp_ok = !ssdp.is_finished();
 
 	let port_str = if port == 80 {
 		String::new()
@@ -188,6 +212,59 @@ pub async fn start_server(
 	};
 	println!("Serving on http://{ip}{port_str}/spritz");
 	println!("DLNA: discoverable as \"{friendly_name}\" on the local network");
+
+	let bonjour = match bonjour::advertise(
+		&friendly_name,
+		port,
+		&server_identity.uuid,
+		hostname.as_deref(),
+	) {
+		Ok(guard) => {
+			let shown =
+				match bonjour::settle(&guard.watch(), std::time::Duration::from_secs(2)).await {
+					bonjour::BonjourStatus::Registered(name) => name,
+					bonjour::BonjourStatus::Pending => friendly_name.clone(),
+					bonjour::BonjourStatus::Failed(e) => {
+						tracing::warn!("Bonjour: {e}");
+						friendly_name.clone()
+					}
+				};
+			println!(
+				"Bonjour: advertising \"{shown}\" as {}",
+				bonjour::SERVICE_TYPE
+			);
+			Some(guard)
+		}
+		Err(e) => {
+			tracing::warn!("Bonjour: {e}");
+			None
+		}
+	};
+	let bonjour_watch = bonjour.as_ref().map(bonjour::BonjourGuard::watch);
+
+	let (_checks, check_task) = netcheck::spawn_monitor(
+		move || {
+			let bonjour_ok = bonjour_watch
+				.as_ref()
+				.is_some_and(|w| !matches!(w.status(), bonjour::BonjourStatus::Failed(_)));
+			netcheck::gather(ip, ssdp_ok, bonjour_ok)
+		},
+		|before, after| {
+			for check in netcheck::new_checks(before, after) {
+				println!("{}", report::check_line(check));
+			}
+		},
+	);
+	let report_task = tokio::spawn(async move {
+		let mut reporter = report::ClientReporter::default();
+		let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+		loop {
+			tick.tick().await;
+			for line in reporter.lines(&clients.snapshot(), std::time::Instant::now(), port) {
+				println!("{line}");
+			}
+		}
+	});
 
 	tokio::select! {
 		result = serve_http(listener, app) => {
@@ -201,6 +278,9 @@ pub async fn start_server(
 			let _ = ssdp.await;
 		}
 	}
+	check_task.abort();
+	report_task.abort();
+	drop(bonjour);
 	Ok(())
 }
 
