@@ -12,6 +12,7 @@ use std::time::Instant;
 struct Seen {
 	stages: [bool; 4],
 	diagnosis: Option<String>,
+	announced: bool,
 }
 
 /// Remembers what was already printed per client, so each stage and each
@@ -39,6 +40,14 @@ impl ClientReporter {
 				c.streamed.is_some(),
 			];
 			let seen = self.seen.entry(c.ip).or_default();
+			if c.announced.is_some() && !seen.announced {
+				out.push(format!(
+					"Client: {} at {} is on the network",
+					c.label(),
+					c.ip
+				));
+			}
+			seen.announced = c.announced.is_some();
 			let newest = (0..4).rev().find(|&i| stages[i] && !seen.stages[i]);
 			if let Some(i) = newest {
 				out.push(format!("Client: {} at {} {}", c.label(), c.ip, VERBS[i]));
@@ -159,6 +168,26 @@ mod tests {
 				.count();
 		}
 		assert_eq!(diagnoses, 1);
+	}
+
+	#[test]
+	fn announces_a_player_on_the_network_once() {
+		use dlna::clients::Announcement;
+		let t = ClientTracker::default();
+		let mut r = ClientReporter::default();
+		let now = std::time::Instant::now();
+		let a = Announcement {
+			instance: "Den".into(),
+			product: "SpritzPlayer/1.2".into(),
+			platform: "tvOS 26.0".into(),
+			model: "Apple TV".into(),
+		};
+		t.announce_at(now, "192.168.1.40".parse().unwrap(), &a);
+		assert_eq!(
+			r.lines(&t.snapshot_at(now), now, 8080),
+			vec!["Client: Den (tvOS 26.0) at 192.168.1.40 is on the network"]
+		);
+		assert!(r.lines(&t.snapshot_at(now), now, 8080).is_empty());
 	}
 
 	#[test]
