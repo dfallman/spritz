@@ -79,9 +79,9 @@ app bundle and an iCloud entitlement, so only Spritz Server publishes it.
 - Media streams come from AVPlayer or VLC with their own user agents. The server attributes
   them **by source IP** to a client already identified from that address. Two devices behind
   one address (a travel router, a NAT'ing hotspot) therefore merge into one record; accepted.
-- **Sanitising.** Every client-supplied string (product, platform, model, device name, and any
-  TXT values a future Player advertisement would add — see Future ideas) has control characters
-  and anything outside printable Unicode removed, is trimmed, and is capped at 64 characters. A
+- **Sanitising.** Every client-supplied string (product, platform, model, device name, and the
+  TXT values of the Player advertisement below) has control characters and anything outside
+  printable Unicode removed, is trimmed, and is capped at 64 characters. A
   value that is empty afterwards counts as absent. The CLI prints these strings, so none may
   carry a terminal escape sequence. (hyper already rejects ESC in HTTP header values, so a raw
   escape can only arrive in the SSDP `USER-AGENT`; over HTTP the risk is C1 controls and bidi
@@ -126,9 +126,23 @@ Written by Spritz Server only, to `NSUbiquitousKeyValueStore`.
   mechanisms only. iCloud is in addition to LAN discovery, not a replacement.
 - Sync takes seconds to minutes, so this is not instant. Its value is reach, not speed.
 
-Player advertisement (`_spritz-player._tcp`) is not part of version 1: it ships only if spike S3
-shows a Mac firewall hides SSDP searches from a blocked app. See Future ideas, below, pending
-S3.
+### Player advertisement
+
+The server cannot otherwise tell a Player blocked by the Mac's firewall from one that is simply
+absent: spike S3 found that with the firewall blocking the app, the server sees no SSDP search
+from the Apple TV at all — the firewall filters even the Mac's own traffic to a blocked app, so
+the search never arrives to be answered or recorded. The Player advertisement gives the server a
+second, independent signal that does not depend on the blocked app receiving anything.
+
+- Type `_spritz-player._tcp`, domain `local.`, advertised by an `NWListener` that cancels every
+  incoming connection.
+- Instance name: the device name where readable, else the model.
+- TXT: `proto=1`, `product=SpritzPlayer/<version>`, `platform=<os> <os-version>`,
+  `model=<model>`.
+- Advertised while the Player is looking for servers, withdrawn when it stops.
+- The server browses `_spritz-player._tcp` and records each announcement under the player's
+  IPv4 address only (players are keyed by IPv4 the same way HTTP clients are). This is the
+  "On network" stage, alongside searched, found, browsed and streamed.
 
 ## Client stages and diagnosis
 
@@ -140,6 +154,8 @@ The server tracks every peer that searches, browses or streams, keyed by IP addr
   `ssdp:all` chatter from phones, speakers and Chromecasts is not.
 - Every HTTP request is mapped to a stage by path (below) and recorded from the tracking
   middleware.
+- A `_spritz-player._tcp` announcement records `announced` (the Player advertisement, above)
+  under the player's IPv4 address, and clears it when the advertisement is withdrawn.
 - An M-SEARCH without a Spritz product token is **ignored** unless the peer is already known,
   so non-Spritz devices sending `ssdp:all` neither fill the list nor evict real clients. Any
   HTTP request lists a peer, so a Samsung TV that browses appears.
@@ -157,13 +173,19 @@ search would clear and re-raise the diagnosis on every one of the Player's 30 s 
 | Condition | Text (shape) |
 |-----------|--------------|
 | A Spritz client whose `unanswered_since` is ≥ 15 s ago and whose latest search is ≤ 10 min ago | "{label} searched for this server but never connected. Check the firewall on this Mac (port {port})." |
+| A Spritz client announced (above) for ≥ 15 s, with no HTTP stage in the 2-minute grace before the advertisement appeared | "{label} is on the network but has not connected to this server. Check the firewall on this Mac (port {port})." |
 | otherwise | none |
+
+A stuck search is checked first, so it takes precedence: a client that is both announced and
+searching unanswered gets the search sentence, not the "on the network" one.
 
 - Only Spritz clients are diagnosed. A non-Spritz peer is tracked only after it has connected,
   and TVs send routine searches without re-fetching the description, so the rule would misfire
   on them.
-- The 2-minute grace before `unanswered_since` starts covers a lost SSDP reply: a Player that
-  connected a minute ago and whose next search goes unanswered is not reported as stuck.
+- The 2-minute grace before `unanswered_since` starts, and the same grace before an
+  announcement, covers a lost SSDP reply or a Player that had just connected: one that connected
+  a minute ago and whose next search goes unanswered, or whose HTTP stage lands just before the
+  advertisement, is not reported as stuck.
 - The 10-minute ceiling keeps a Player that gave up an hour ago from holding an orange
   diagnosis, and the status dot, indefinitely.
 - The text names the Mac's firewall only. A search that reached the server proves the Player's
@@ -255,13 +277,9 @@ Which mechanism survives which failure:
 | DHCP changed the Mac's IP, multicast fine | ✓ | ✓ | ✓ | ✓ | ✓ | Hostname fallback matters for a server added by hand. |
 | Mac and Apple TV on different subnets or VLANs | ✗ | ✗ | ✗ | ✗ | ✓ if routed | Only if the router routes between them; many IoT VLANs do not. |
 | Player's Local Network access denied (iOS, iPadOS; tvOS to verify) | ✗ | ✗ | ✗ | ✗ | ✗ | The record is readable but every connection fails. The Player says so. |
-| Mac firewall blocking the app | pending S3 | advert ✓, connect ✗ | ✗ | ✗ | ✗ | Diagnosis only: from the search (if the spike shows it arrives) or the Player advertisement. A fix needs a reverse connection. |
+| Mac firewall blocking the app | ✗ | advert ✓, connect ✗ | ✗ | ✗ | ✗ | Diagnosis from the Player advertisement (Bonjour is exempt from the firewall). A fix needs a reverse connection. |
 | AP client isolation | ✗ | ✗ | ✗ | ✗ | ✗ | Only peer-to-peer Wi-Fi (future). |
 | Mac asleep | ✗ | ✓ Sleep Proxy | ✓ Sleep Proxy | ✓ Sleep Proxy | ✓ Sleep Proxy | Needs the Bonjour registration (below). |
-
-Spike S3 (what the Mac's firewall hides from the SSDP search) has not been run yet, so the SSDP
-cell for the firewall row, and whether the Player advertisement is needed at all, are still
-open — see Future ideas, below.
 
 ## iCloud trade-offs
 
@@ -317,22 +335,6 @@ on 10.0.4.7").
 tunnels AVPlayer and VLC requests over that connection; the Player advertisement is the
 groundwork.
 **Open questions:** multiplexing, streaming throughput, battery on iOS.
-
-### Player advertisement (pending spike S3)
-
-**Problem:** the server cannot tell a blocked Player from an absent one.
-**Sketch:** the Player advertises `_spritz-player._tcp` (domain `local.`) through an
-`NWListener` that cancels every incoming connection, with instance name the device name where
-readable, else the model, and TXT `proto=1`, `product=SpritzPlayer/<version>`,
-`platform=<os> <os-version>`, `model=<model>`. Advertised while the Player is polling
-(foreground); stopped with polling. The server's client tracker would then record `announced`
-(when the advertisement appeared, cleared when it is withdrawn) and add a second diagnosis: a
-peer that has been announced for 15 s or more, with no HTTP stage in the 2 minutes after the
-announcement, gets "{label} is on the network but has not connected to this server. Check the
-firewall on this Mac (port {port})." This only ships in v1 if spike S3 shows the Mac's firewall
-hides SSDP searches from a blocked app; otherwise it stays a future idea.
-**Open questions:** whether a firewall-blocked app sees the search after all on newer macOS;
-whether tvOS also withdraws the advertisement when the app suspends without stopping.
 
 ### Peer-to-peer Wi-Fi
 
