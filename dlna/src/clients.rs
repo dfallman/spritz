@@ -195,6 +195,18 @@ impl ClientRecord {
 	}
 }
 
+/// What a `_spritz-player._tcp` advertisement says: its instance name and TXT.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Announcement {
+	pub instance: String,
+	/// `product=` TXT value, e.g. `SpritzPlayer/1.2`.
+	pub product: String,
+	/// `platform=` TXT value, e.g. `tvOS 26.0`.
+	pub platform: String,
+	/// `model=` TXT value, e.g. `Apple TV`.
+	pub model: String,
+}
+
 /// Shared, cloneable record of client progress. One per server; carried in
 /// every `DlnaConfig` snapshot so a library reload keeps it.
 #[derive(Clone, Default)]
@@ -294,6 +306,53 @@ impl ClientTracker {
 		evict(&mut map);
 	}
 
+	pub fn announce(&self, ip: IpAddr, a: &Announcement) {
+		self.announce_at(Instant::now(), ip, a);
+	}
+
+	/// A Spritz player advertised itself from `ip`. Non-Spritz products are
+	/// ignored. The first appearance time is kept across repeats.
+	// The lock must span the whole check-modify-evict sequence below, as in
+	// `record_at`.
+	#[allow(clippy::significant_drop_tightening)]
+	pub fn announce_at(&self, now: Instant, ip: IpAddr, a: &Announcement) {
+		let product = field(&a.product);
+		if !is_spritz_token(&product) {
+			return;
+		}
+		let agent = Agent {
+			product,
+			platform: field(&a.platform),
+			model: field(&a.model),
+			spritz: true,
+		};
+		let ip = normalise(ip);
+		let mut map = self.lock();
+		let record = map.entry(ip).or_insert_with(|| blank(ip, now));
+		// The TXT form is as detailed as the HTTP one; it replaces anything
+		// but a Spritz agent that already names a model.
+		if !record.agent.spritz || record.agent.model.is_empty() {
+			record.agent = agent;
+		}
+		if record.device_name.is_empty()
+			&& let Some(name) = sanitize(&a.instance).filter(|n| *n != record.agent.model)
+		{
+			record.device_name = name;
+		}
+		if record.announced.is_none() {
+			record.announced = Some(now);
+		}
+		record.last_seen = now;
+		evict(&mut map);
+	}
+
+	/// The advertisement from `ip` went away (the app was suspended or quit).
+	pub fn withdraw(&self, ip: IpAddr) {
+		if let Some(r) = self.lock().get_mut(&normalise(ip)) {
+			r.announced = None;
+		}
+	}
+
 	#[must_use]
 	pub fn snapshot(&self) -> Vec<ClientRecord> {
 		self.snapshot_at(Instant::now())
@@ -324,15 +383,20 @@ pub(crate) fn evict(map: &mut HashMap<IpAddr, ClientRecord>) {
 	}
 }
 
-/// One sentence explaining where `record` got stuck, or `None`.
+/// One sentence explaining where `record` got stuck, or `None`. A stuck
+/// search is reported first; an advertised player that never connects next.
 ///
 /// Only Spritz clients are diagnosed: other peers are tracked once they
 /// connected, and TVs send routine searches without reconnecting. The
-/// diagnosis runs from [`STUCK_AFTER`] past the first unanswered search
-/// until the latest search is older than [`DIAGNOSIS_WINDOW`], so a client
-/// that keeps searching gets one steady diagnosis.
+/// search diagnosis runs from [`STUCK_AFTER`] past the first unanswered
+/// search until the latest search is older than [`DIAGNOSIS_WINDOW`], so a
+/// client that keeps searching gets one steady diagnosis.
 #[must_use]
 pub fn diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Option<String> {
+	search_diagnosis(record, now, http_port).or_else(|| announce_diagnosis(record, now, http_port))
+}
+
+fn search_diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Option<String> {
 	if !record.agent.spritz {
 		return None;
 	}
@@ -343,6 +407,22 @@ pub fn diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Option<
 	}
 	Some(format!(
 		"{} searched for this server but never connected. Check the firewall on this Mac (port {http_port}).",
+		record.label()
+	))
+}
+
+/// An advertised player is stuck when it has been on the network for
+/// [`STUCK_AFTER`] and no HTTP stage happened in the [`SEARCH_GRACE`] before
+/// the advertisement appeared: a lost first request still counts as fine.
+fn announce_diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Option<String> {
+	let announced = record.announced?;
+	let cutoff = announced.checked_sub(SEARCH_GRACE).unwrap_or(announced);
+	let connected = record.last_http().is_some_and(|t| t >= cutoff);
+	if connected || now.saturating_duration_since(announced) < STUCK_AFTER {
+		return None;
+	}
+	Some(format!(
+		"{} is on the network but has not connected to this server. Check the firewall on this Mac (port {http_port}).",
 		record.label()
 	))
 }
@@ -902,5 +982,129 @@ mod tests {
 		let r = t.snapshot_at(now).remove(0);
 		assert!(r.unanswered_since.is_some());
 		assert_eq!(diagnosis(&r, now, 8080), None);
+	}
+
+	fn player(instance: &str) -> Announcement {
+		Announcement {
+			instance: instance.into(),
+			product: "SpritzPlayer/1.2".into(),
+			platform: "tvOS 26.0".into(),
+			model: "Apple TV".into(),
+		}
+	}
+
+	#[test]
+	fn an_announcement_lists_a_spritz_player() {
+		let t = ClientTracker::default();
+		let now = Instant::now();
+		t.announce_at(now, ip("192.168.1.40"), &player("Living Room"));
+		let r = t.snapshot_at(now).remove(0);
+		assert_eq!(r.announced, Some(now));
+		assert!(r.agent.spritz);
+		assert_eq!(r.label(), "Living Room (tvOS 26.0)");
+		assert!(!r.http);
+	}
+
+	#[test]
+	fn an_instance_named_after_the_model_is_not_a_device_name() {
+		let t = ClientTracker::default();
+		let now = Instant::now();
+		t.announce_at(now, ip("192.168.1.40"), &player("Apple TV"));
+		assert_eq!(t.snapshot_at(now)[0].device_name, "");
+	}
+
+	#[test]
+	fn non_spritz_announcements_are_ignored() {
+		let t = ClientTracker::default();
+		let now = Instant::now();
+		let mut a = player("Speaker");
+		a.product = "Sonos/1.0".into();
+		t.announce_at(now, ip("192.168.1.70"), &a);
+		assert!(t.snapshot_at(now).is_empty());
+	}
+
+	#[test]
+	fn a_repeated_announcement_keeps_the_first_time_and_withdraw_clears_it() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		t.announce_at(start, ip("192.168.1.40"), &player("Den"));
+		t.announce_at(
+			start + Duration::from_secs(30),
+			ip("192.168.1.40"),
+			&player("Den"),
+		);
+		assert_eq!(t.snapshot_at(start)[0].announced, Some(start));
+		t.withdraw(ip("::ffff:192.168.1.40"));
+		assert_eq!(t.snapshot_at(start)[0].announced, None);
+	}
+
+	#[test]
+	fn an_announced_player_that_never_connects_is_diagnosed() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		t.announce_at(start, ip("192.168.1.40"), &player("Den"));
+		let r = t.snapshot_at(start).remove(0);
+		assert_eq!(
+			diagnosis(
+				&r,
+				(start + STUCK_AFTER)
+					.checked_sub(Duration::from_secs(1))
+					.unwrap(),
+				8080
+			),
+			None
+		);
+		assert_eq!(
+			diagnosis(&r, start + STUCK_AFTER, 8080).as_deref(),
+			Some(
+				"Den (tvOS 26.0) is on the network but has not connected to this server. Check the firewall on this Mac (port 8080)."
+			)
+		);
+	}
+
+	#[test]
+	fn an_announced_player_that_connected_is_fine_for_hours() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		t.announce_at(start, ip("192.168.1.40"), &player("Den"));
+		t.record_at(
+			start + Duration::from_secs(2),
+			ip("192.168.1.40"),
+			Stage::Browsed,
+			None,
+			None,
+		);
+		let r = t.snapshot_at(start).remove(0);
+		assert_eq!(diagnosis(&r, start + Duration::from_hours(3), 8080), None);
+	}
+
+	#[test]
+	fn a_withdrawn_player_is_not_diagnosed() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		t.announce_at(start, ip("192.168.1.40"), &player("Den"));
+		t.withdraw(ip("192.168.1.40"));
+		let r = t.snapshot_at(start).remove(0);
+		assert_eq!(diagnosis(&r, start + Duration::from_mins(1), 8080), None);
+	}
+
+	#[test]
+	fn the_search_rule_wins_when_both_apply() {
+		let t = ClientTracker::default();
+		let start = Instant::now();
+		t.announce_at(start, ip("192.168.1.40"), &player("Den"));
+		t.record_at(
+			start,
+			ip("192.168.1.40"),
+			Stage::Searched,
+			Some(PLAYER_SSDP),
+			None,
+		);
+		let r = t.snapshot_at(start).remove(0);
+		assert!(
+			diagnosis(&r, start + STUCK_AFTER, 8080)
+				.unwrap()
+				.contains("searched for this server")
+		);
 	}
 }
