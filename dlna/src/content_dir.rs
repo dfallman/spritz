@@ -807,6 +807,7 @@ mod tests {
 			audio_idx: vec![],
 			folder_nodes: vec![],
 			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
 		};
 		let xml = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
 		assert!(xml.contains("/m/0/clip.mp4"), "{xml}");
@@ -851,6 +852,7 @@ mod tests {
 			audio_idx: vec![],
 			folder_nodes: vec![],
 			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
 		};
 		let xml = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
 		assert!(xml.contains("DLNA.ORG_PN=AVC_MP4_HP_HD_AAC"), "{xml}");
@@ -881,6 +883,7 @@ mod tests {
 			audio_idx: vec![],
 			folder_nodes: vec![],
 			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
 		};
 		let before = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
 		assert!(!before.contains("duration="), "{before}");
