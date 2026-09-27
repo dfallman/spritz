@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
+## [0.1.9] - 2026-09-27
+
+### Added
+
+- Spritz protocol identity endpoint at `/.well-known/spritz`: name, UPnP UDN, port, LAN addresses and `.local` hostname
+- Advertise the server over Bonjour as `_spritz._tcp` (through mDNSResponder on macOS, so the Bonjour Sleep Proxy can wake a sleeping Mac)
+- Track Spritz clients from SSDP searches and HTTP requests, and print each client's progress: found, browsing, streaming
+- Diagnose players that search but never connect, and players that advertise `_spritz-player._tcp` but never connect: "Check the firewall on this Mac"
+- Network self-checks at startup and every 5 s: no LAN address, Local Network access denied (macOS), UDP 1900 unavailable, Bonjour failure, VPN, several LAN subnets
+- Expose the server's bound addresses to embedders
+
+### Fixed
+
+- Strip control, bidi and other invisible characters from client names and user agents before printing them
+- Honour a specific `--bind` in the identity addresses and the DLNA line
+
+### Documentation
+
+- Describe the spritz protocol in PROTOCOL.md
+
 ## [0.1.8] - 2026-09-22
 
 ### Added
