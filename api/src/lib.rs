@@ -251,6 +251,11 @@ pub async fn start_server(
 			None
 		}
 	};
+	// Players the firewall hides from SSDP still show up here: mDNSResponder
+	// is exempt from it. Failure only logs.
+	let players = bonjour::browse_players(clients.clone())
+		.map_err(|e| tracing::warn!("Bonjour browse: {e}"))
+		.ok();
 	let bonjour_watch = bonjour.as_ref().map(bonjour::BonjourGuard::watch);
 
 	let (_checks, check_task) = netcheck::spawn_monitor(
@@ -292,6 +297,7 @@ pub async fn start_server(
 	};
 	check_task.abort();
 	report_task.abort();
+	drop(players);
 	drop(bonjour);
 	if let Some(result) = serve_result {
 		result?;
