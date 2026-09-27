@@ -255,6 +255,7 @@ mod tests {
 				media_has_art: vec![],
 				media_subs: vec![],
 				event_hub: crate::event::EventHub::default(),
+				clients: crate::clients::ClientTracker::default(),
 			},
 			"127.0.0.1:8080",
 		);

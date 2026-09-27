@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tower_http::timeout::TimeoutLayer;
 
+pub mod clients;
 pub mod content_dir;
 pub mod description;
 pub mod event;
@@ -61,6 +62,8 @@ pub struct DlnaConfig {
 	/// indexing. Referenced by DIDL ids `f:N` in the "By folder" view.
 	pub folder_nodes: Vec<FolderNode>,
 	pub event_hub: event::EventHub,
+	/// Client progress, shared across library reloads.
+	pub clients: clients::ClientTracker,
 }
 
 /// Container metadata parallel to `DlnaConfig::media_files`.
