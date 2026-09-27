@@ -1,9 +1,12 @@
-//! Bonjour (`_spritz._tcp`) advertisement.
+//! Bonjour: the `_spritz._tcp` advertisement, and browsing for Spritz
+//! players that advertise `_spritz-player._tcp`.
 //!
 //! macOS goes through the system mDNSResponder (`dns_sd`), so the Bonjour
 //! Sleep Proxy keeps a sleeping Mac visible. Elsewhere the pure-Rust
 //! `mdns-sd` responder is used.
 
+use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -34,6 +37,94 @@ pub fn txt_record(pairs: &[(&'static str, String)]) -> Vec<u8> {
 		out.extend_from_slice(entry.as_bytes());
 	}
 	out
+}
+
+/// DNS-SD service type Spritz players advertise (spec §3.6).
+pub const PLAYER_SERVICE_TYPE: &str = "_spritz-player._tcp";
+
+/// Decode DNS-SD TXT wire format. A key without `=` has an empty value;
+/// a zero-length or truncated entry ends the record; bytes are decoded
+/// lossily.
+#[must_use]
+pub fn parse_txt(bytes: &[u8]) -> Vec<(String, String)> {
+	let mut out = Vec::new();
+	let mut rest = bytes;
+	while let Some((&len, tail)) = rest.split_first() {
+		let len = usize::from(len);
+		if len == 0 || len > tail.len() {
+			break;
+		}
+		let entry = String::from_utf8_lossy(&tail[..len]);
+		let (k, v) = entry.split_once('=').unwrap_or((&entry, ""));
+		out.push((k.to_string(), v.to_string()));
+		rest = &tail[len..];
+	}
+	out
+}
+
+/// The tracker's view of one player advertisement. The tracker sanitises
+/// every field.
+#[must_use]
+pub fn announcement(instance: &str, txt: &[(String, String)]) -> dlna::clients::Announcement {
+	let get = |key: &str| {
+		txt.iter()
+			.find(|(k, _)| k == key)
+			.map(|(_, v)| v.clone())
+			.unwrap_or_default()
+	};
+	dlna::clients::Announcement {
+		instance: instance.to_string(),
+		product: get("product"),
+		platform: get("platform"),
+		model: get("model"),
+	}
+}
+
+/// Which IPv4 address each advertised player was announced under, so that a
+/// removal withdraws exactly that address.
+#[derive(Default)]
+struct Announced(HashMap<String, IpAddr>);
+
+impl Announced {
+	/// Records `instance` at `ip`. Returns the address to withdraw when the
+	/// instance moved from one no other instance still uses.
+	fn insert(&mut self, instance: &str, ip: IpAddr) -> Option<IpAddr> {
+		let old = self.0.insert(instance.to_string(), ip)?;
+		(old != ip && !self.holds(old)).then_some(old)
+	}
+
+	/// Forgets `instance`. Returns its address unless another instance still
+	/// uses it.
+	fn remove(&mut self, instance: &str) -> Option<IpAddr> {
+		let ip = self.0.remove(instance)?;
+		(!self.holds(ip)).then_some(ip)
+	}
+
+	fn holds(&self, ip: IpAddr) -> bool {
+		self.0.values().any(|v| *v == ip)
+	}
+}
+
+/// Keeps the player browser running. Dropping it stops browsing.
+///
+/// On macOS the drop waits for the browser's private dispatch queue, so it
+/// must not happen on that queue; nothing outside this module runs there.
+pub struct BrowseGuard {
+	_browser: browse::Browser,
+}
+
+/// Browse `_spritz-player._tcp` and feed appearances and removals into
+/// `tracker`. Failure is not fatal for the caller: log and carry on.
+///
+/// Players are keyed by their IPv4 address, the one their HTTP requests
+/// arrive from; an IPv6 link-local key would never match them.
+///
+/// # Errors
+/// When the responder refuses to start browsing.
+pub fn browse_players(tracker: dlna::clients::ClientTracker) -> anyhow::Result<BrowseGuard> {
+	Ok(BrowseGuard {
+		_browser: browse::start(tracker)?,
+	})
 }
 
 /// Longest DNS-SD instance name, in bytes (one DNS label).
@@ -192,8 +283,10 @@ pub(crate) mod imp {
 	}
 
 	/// `kDNSServiceFlagsAdd`: set when the name is registered, clear when the
-	/// responder has withdrawn it (a conflict; a renamed Add follows).
-	const FLAGS_ADD: u32 = 0x2;
+	/// responder has withdrawn it (a conflict; a renamed Add follows). Browse
+	/// and address replies use it the same way: set for an appearance, clear
+	/// for a removal.
+	pub const FLAGS_ADD: u32 = 0x2;
 
 	/// What one register callback means for the status.
 	pub fn status_from_callback(flags: u32, error: i32, name: Option<&str>) -> BonjourStatus {
@@ -385,6 +478,530 @@ pub(crate) mod imp {
 	}
 }
 
+#[cfg(target_os = "macos")]
+mod browse {
+	use super::Announced;
+	use super::imp::{
+		DNSServiceRefDeallocate, DNSServiceSetDispatchQueue, DispatchQueue, DnsServiceRef,
+		FLAGS_ADD, dispatch_release, dispatch_sync_f, new_queue,
+	};
+	use dlna::clients::{Announcement, ClientTracker};
+	use std::collections::{HashMap, HashSet};
+	use std::ffi::{CStr, CString, c_char, c_void};
+	use std::net::{IpAddr, Ipv4Addr};
+	use std::ptr;
+	use std::sync::{Mutex, MutexGuard, PoisonError};
+
+	/// `kDNSServiceProtocol_IPv4`: players are keyed by IPv4 only.
+	const PROTOCOL_IPV4: u32 = 0x01;
+	/// `AF_INET` on Darwin.
+	const AF_INET: u8 = 2;
+	/// `sizeof(struct sockaddr_in)`.
+	const SOCKADDR_IN_LEN: usize = 16;
+
+	type BrowseReply = extern "C" fn(
+		sd_ref: DnsServiceRef,
+		flags: u32,
+		interface_index: u32,
+		error_code: i32,
+		name: *const c_char,
+		regtype: *const c_char,
+		domain: *const c_char,
+		context: *mut c_void,
+	);
+	type ResolveReply = extern "C" fn(
+		sd_ref: DnsServiceRef,
+		flags: u32,
+		interface_index: u32,
+		error_code: i32,
+		fullname: *const c_char,
+		hosttarget: *const c_char,
+		port_network_order: u16,
+		txt_len: u16,
+		txt_record: *const u8,
+		context: *mut c_void,
+	);
+	type AddrInfoReply = extern "C" fn(
+		sd_ref: DnsServiceRef,
+		flags: u32,
+		interface_index: u32,
+		error_code: i32,
+		hostname: *const c_char,
+		address: *const u8,
+		ttl: u32,
+		context: *mut c_void,
+	);
+
+	// dns_sd.h, in libSystem.
+	unsafe extern "C" {
+		fn DNSServiceBrowse(
+			sd_ref: *mut DnsServiceRef,
+			flags: u32,
+			interface_index: u32,
+			regtype: *const c_char,
+			domain: *const c_char,
+			callback: Option<BrowseReply>,
+			context: *mut c_void,
+		) -> i32;
+		fn DNSServiceResolve(
+			sd_ref: *mut DnsServiceRef,
+			flags: u32,
+			interface_index: u32,
+			name: *const c_char,
+			regtype: *const c_char,
+			domain: *const c_char,
+			callback: Option<ResolveReply>,
+			context: *mut c_void,
+		) -> i32;
+		fn DNSServiceGetAddrInfo(
+			sd_ref: *mut DnsServiceRef,
+			flags: u32,
+			interface_index: u32,
+			protocol: u32,
+			hostname: *const c_char,
+			callback: Option<AddrInfoReply>,
+			context: *mut c_void,
+		) -> i32;
+	}
+
+	/// The address a player is keyed under, from a Darwin socket address
+	/// (`sa_len`, `sa_family`, then the family's fields): IPv4 only, and never
+	/// loopback, which a player on this Mac also answers on but never
+	/// connects from.
+	pub fn player_ipv4(bytes: &[u8]) -> Option<Ipv4Addr> {
+		match bytes {
+			[_, AF_INET, _, _, a, b, c, d, ..] => {
+				Some(Ipv4Addr::new(*a, *b, *c, *d)).filter(|ip| !ip.is_loopback())
+			}
+			_ => None,
+		}
+	}
+
+	/// The lookup a player is waiting on: first its SRV/TXT, then its host's
+	/// IPv4 address.
+	enum Step {
+		Resolving,
+		Addressing(Announcement),
+	}
+
+	struct Lookup {
+		sd_ref: DnsServiceRef,
+		step: Step,
+	}
+
+	#[derive(Default)]
+	struct Player {
+		/// Interfaces the browse has reported the instance on. It is gone
+		/// once the last one is removed.
+		interfaces: HashSet<u32>,
+		lookup: Option<Lookup>,
+	}
+
+	/// Everything the callbacks share. Every ref uses this as its context and
+	/// every callback runs on `queue`, which is serial; the mutexes only give
+	/// safe interior mutability.
+	struct State {
+		tracker: ClientTracker,
+		queue: DispatchQueue,
+		players: Mutex<HashMap<String, Player>>,
+		announced: Mutex<Announced>,
+	}
+
+	fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+		m.lock().unwrap_or_else(PoisonError::into_inner)
+	}
+
+	/// Puts a ref just created by a `dns_sd` call that returned `err` on
+	/// `queue`, or deallocates it when that call or the scheduling failed.
+	///
+	/// # Safety
+	/// `sd_ref` is NULL or a fresh ref not yet scheduled anywhere.
+	unsafe fn schedule(
+		err: i32,
+		sd_ref: DnsServiceRef,
+		queue: DispatchQueue,
+	) -> Option<DnsServiceRef> {
+		if sd_ref.is_null() {
+			return None;
+		}
+		// SAFETY: per the contract, `sd_ref` is a valid, unscheduled ref.
+		if err == 0 && unsafe { DNSServiceSetDispatchQueue(sd_ref, queue) } == 0 {
+			return Some(sd_ref);
+		}
+		// SAFETY: the ref is not scheduled, so it can be deallocated here.
+		unsafe { DNSServiceRefDeallocate(sd_ref) };
+		None
+	}
+
+	/// Deallocates a lookup's ref.
+	///
+	/// # Safety
+	/// Must run on the state's queue, with a ref taken out of a `Lookup`.
+	unsafe fn cancel(sd_ref: DnsServiceRef) {
+		// SAFETY: a lookup's ref is valid and scheduled on the queue we are
+		// on; dns_sd allows deallocating it here, even from inside its own
+		// callback, and delivers no callbacks for it afterwards.
+		unsafe { DNSServiceRefDeallocate(sd_ref) };
+	}
+
+	/// The player whose lookup is `sd_ref`, with its lookup taken out.
+	fn take_lookup(state: &State, sd_ref: DnsServiceRef) -> Option<(String, Lookup)> {
+		let mut players = lock(&state.players);
+		players.iter_mut().find_map(|(name, player)| {
+			if player.lookup.as_ref().is_some_and(|l| l.sd_ref == sd_ref) {
+				player.lookup.take().map(|l| (name.clone(), l))
+			} else {
+				None
+			}
+		})
+	}
+
+	// The lock spans the check and the start of the resolve: the new lookup
+	// is stored in the entry borrowed from it.
+	#[allow(clippy::significant_drop_tightening)]
+	extern "C" fn on_browse(
+		_sd_ref: DnsServiceRef,
+		flags: u32,
+		interface_index: u32,
+		error_code: i32,
+		name: *const c_char,
+		regtype: *const c_char,
+		domain: *const c_char,
+		context: *mut c_void,
+	) {
+		// dns_sd leaves the other arguments undefined when `error_code` is
+		// set, so nothing else is read then.
+		if error_code != 0 {
+			tracing::warn!("Bonjour browse: mDNSResponder reported error {error_code}");
+			return;
+		}
+		if name.is_null() || regtype.is_null() || domain.is_null() {
+			return;
+		}
+		// SAFETY: every ref's context is the `State` boxed in `start`; it is
+		// freed only after every ref is deallocated on this queue.
+		let state = unsafe { &*context.cast_const().cast::<State>() };
+		// SAFETY: on success dns_sd passes a NUL-terminated name, valid for
+		// the duration of this call.
+		let instance = unsafe { CStr::from_ptr(name) }
+			.to_string_lossy()
+			.into_owned();
+		let mut players = lock(&state.players);
+		if flags & FLAGS_ADD == 0 {
+			let Some(player) = players.get_mut(&instance) else {
+				return;
+			};
+			player.interfaces.remove(&interface_index);
+			if !player.interfaces.is_empty() {
+				return;
+			}
+			if let Some(lookup) = players.remove(&instance).and_then(|p| p.lookup) {
+				// SAFETY: we are on the queue.
+				unsafe { cancel(lookup.sd_ref) };
+			}
+			drop(players);
+			let gone = lock(&state.announced).remove(&instance);
+			if let Some(ip) = gone {
+				state.tracker.withdraw(ip);
+			}
+			return;
+		}
+		let player = players.entry(instance).or_default();
+		let known = !player.interfaces.is_empty();
+		player.interfaces.insert(interface_index);
+		if known {
+			return;
+		}
+		let mut sd_ref: DnsServiceRef = ptr::null_mut();
+		// SAFETY: the strings come from dns_sd and are valid for this call;
+		// dns_sd copies them. `context` stays valid as described above.
+		let err = unsafe {
+			DNSServiceResolve(
+				&raw mut sd_ref,
+				0,
+				interface_index,
+				name,
+				regtype,
+				domain,
+				Some(on_resolve),
+				context,
+			)
+		};
+		// SAFETY: `sd_ref` was just created by `DNSServiceResolve`.
+		player.lookup = unsafe { schedule(err, sd_ref, state.queue) }.map(|sd_ref| Lookup {
+			sd_ref,
+			step: Step::Resolving,
+		});
+	}
+
+	extern "C" fn on_resolve(
+		sd_ref: DnsServiceRef,
+		_flags: u32,
+		_interface_index: u32,
+		error_code: i32,
+		_fullname: *const c_char,
+		hosttarget: *const c_char,
+		_port: u16,
+		txt_len: u16,
+		txt_record: *const u8,
+		context: *mut c_void,
+	) {
+		// SAFETY: as in `on_browse`.
+		let state = unsafe { &*context.cast_const().cast::<State>() };
+		let Some((instance, lookup)) = take_lookup(state, sd_ref) else {
+			return;
+		};
+		// The callback's arguments are copied before its ref is deallocated.
+		let copied = (error_code == 0 && !hosttarget.is_null()).then(|| {
+			// SAFETY: on success dns_sd passes a NUL-terminated host name and
+			// `txt_len` bytes of TXT, both valid for this call.
+			let host = unsafe { CStr::from_ptr(hosttarget) }.to_owned();
+			let txt = if txt_record.is_null() {
+				Vec::new()
+			} else {
+				// SAFETY: as above, `txt_record` holds `txt_len` bytes.
+				let bytes = unsafe { std::slice::from_raw_parts(txt_record, usize::from(txt_len)) };
+				super::parse_txt(bytes)
+			};
+			(host, super::announcement(&instance, &txt))
+		});
+		// SAFETY: we are on the queue.
+		unsafe { cancel(lookup.sd_ref) };
+		let Some((host, announcement)) = copied else {
+			return;
+		};
+		let mut addr_ref: DnsServiceRef = ptr::null_mut();
+		// Any interface: the browse reports a player on this Mac on loopback
+		// first, where its host only has 127.0.0.1.
+		// SAFETY: `host` is a valid C string for the call; dns_sd copies it.
+		// `context` stays valid as described in `on_browse`.
+		let err = unsafe {
+			DNSServiceGetAddrInfo(
+				&raw mut addr_ref,
+				0,
+				0,
+				PROTOCOL_IPV4,
+				host.as_ptr(),
+				Some(on_address),
+				context,
+			)
+		};
+		// SAFETY: `addr_ref` was just created by `DNSServiceGetAddrInfo`.
+		let lookup = unsafe { schedule(err, addr_ref, state.queue) }.map(|sd_ref| Lookup {
+			sd_ref,
+			step: Step::Addressing(announcement),
+		});
+		// Only callbacks on this queue remove players, so the player whose
+		// lookup was just taken is still listed.
+		let mut players = lock(&state.players);
+		if let Some(player) = players.get_mut(&instance) {
+			player.lookup = lookup;
+		}
+	}
+
+	extern "C" fn on_address(
+		sd_ref: DnsServiceRef,
+		flags: u32,
+		_interface_index: u32,
+		error_code: i32,
+		_hostname: *const c_char,
+		address: *const u8,
+		_ttl: u32,
+		context: *mut c_void,
+	) {
+		// SAFETY: as in `on_browse`.
+		let state = unsafe { &*context.cast_const().cast::<State>() };
+		let ip = if error_code == 0 && flags & FLAGS_ADD != 0 && !address.is_null() {
+			// SAFETY: on success with Add set, dns_sd passes a valid socket
+			// address, and every socket address starts with `sa_len` and
+			// `sa_family`. Only an `AF_INET` one (a 16-byte `sockaddr_in`) is
+			// read in full.
+			unsafe {
+				(*address.add(1) == AF_INET)
+					.then(|| std::slice::from_raw_parts(address, SOCKADDR_IN_LEN))
+					.and_then(player_ipv4)
+			}
+		} else {
+			None
+		};
+		// Neither an error nor an IPv6 or loopback answer yields an address;
+		// on an error the lookup is dropped (a later appearance retries),
+		// otherwise it keeps waiting for a usable answer.
+		if error_code == 0 && ip.is_none() {
+			return;
+		}
+		let Some((instance, lookup)) = take_lookup(state, sd_ref) else {
+			return;
+		};
+		// SAFETY: we are on the queue.
+		unsafe { cancel(lookup.sd_ref) };
+		let (Some(ip), Step::Addressing(announcement)) = (ip, lookup.step) else {
+			return;
+		};
+		let ip = IpAddr::V4(ip);
+		let moved = lock(&state.announced).insert(&instance, ip);
+		if let Some(old) = moved {
+			state.tracker.withdraw(old);
+		}
+		state.tracker.announce(ip, &announcement);
+	}
+
+	pub struct Browser {
+		sd_ref: DnsServiceRef,
+		state: *const State,
+	}
+
+	// SAFETY: once browsing, every access to the refs and to `State` happens on
+	// the private serial queue: dns_sd delivers callbacks there, and `Drop`
+	// tears down there through `dispatch_sync_f`. The struct itself only
+	// carries the pointers and has no `&self` methods, so moving or sharing it
+	// across threads is sound; this is what makes `BrowseGuard` `Send`.
+	unsafe impl Send for Browser {}
+	unsafe impl Sync for Browser {}
+
+	extern "C" fn teardown(context: *mut c_void) {
+		// SAFETY: runs once, on the queue, through `dispatch_sync_f` from
+		// `Drop`, with the `Browser` being dropped; no callback runs meanwhile.
+		let browser = unsafe { &*context.cast_const().cast::<Browser>() };
+		// SAFETY: `state` is alive until `Drop` frees it after this returns.
+		let state = unsafe { &*browser.state };
+		// SAFETY: the browse ref is valid and scheduled on this queue.
+		unsafe { DNSServiceRefDeallocate(browser.sd_ref) };
+		for lookup in lock(&state.players).drain().filter_map(|(_, p)| p.lookup) {
+			// SAFETY: we are on the queue.
+			unsafe { cancel(lookup.sd_ref) };
+		}
+	}
+
+	impl Drop for Browser {
+		fn drop(&mut self) {
+			// SAFETY: `state` came from `Box::into_raw` in `start`. After the
+			// synchronous teardown on the queue no ref is left, so no callback
+			// can use the state or the queue, and both can be released. This
+			// would deadlock if run on the queue itself, which only runs this
+			// module's callbacks.
+			unsafe {
+				let queue = (*self.state).queue;
+				dispatch_sync_f(queue, (&raw mut *self).cast(), teardown);
+				drop(Box::from_raw(self.state.cast_mut()));
+				dispatch_release(queue);
+			}
+		}
+	}
+
+	pub fn start(tracker: ClientTracker) -> anyhow::Result<Browser> {
+		let regtype = CString::new(super::PLAYER_SERVICE_TYPE)?;
+		let queue = new_queue();
+		let state = Box::into_raw(Box::new(State {
+			tracker,
+			queue,
+			players: Mutex::default(),
+			announced: Mutex::default(),
+		}));
+		let mut sd_ref: DnsServiceRef = ptr::null_mut();
+		// SAFETY: all pointers are valid for the call; dns_sd copies the
+		// strings. `state` outlives the ref (see `Drop`). The NULL domain
+		// browses the default domains.
+		let err = unsafe {
+			DNSServiceBrowse(
+				&raw mut sd_ref,
+				0,
+				0,
+				regtype.as_ptr(),
+				ptr::null(),
+				Some(on_browse),
+				state.cast(),
+			)
+		};
+		// SAFETY: `sd_ref` was just created by `DNSServiceBrowse`.
+		let Some(sd_ref) = (unsafe { schedule(err, sd_ref, queue) }) else {
+			// SAFETY: no ref uses the state or the queue.
+			unsafe {
+				drop(Box::from_raw(state));
+				dispatch_release(queue);
+			}
+			anyhow::bail!("DNSServiceBrowse failed ({err})");
+		};
+		Ok(Browser { sd_ref, state })
+	}
+}
+
+#[cfg(not(target_os = "macos"))]
+mod browse {
+	use super::Announced;
+	use dlna::clients::ClientTracker;
+	use mdns_sd::{ServiceDaemon, ServiceEvent};
+	use std::net::IpAddr;
+
+	pub struct Browser {
+		daemon: ServiceDaemon,
+		thread: Option<std::thread::JoinHandle<()>>,
+	}
+
+	impl Drop for Browser {
+		fn drop(&mut self) {
+			// Shutting down closes the event channel, which ends the thread.
+			let _ = self.daemon.shutdown();
+			if let Some(thread) = self.thread.take() {
+				let _ = thread.join();
+			}
+		}
+	}
+
+	fn instance_of(fullname: &str) -> String {
+		let suffix = format!(".{}.local.", super::PLAYER_SERVICE_TYPE);
+		fullname
+			.strip_suffix(&suffix)
+			.unwrap_or(fullname)
+			.to_string()
+	}
+
+	pub fn start(tracker: ClientTracker) -> anyhow::Result<Browser> {
+		let daemon = ServiceDaemon::new()?;
+		let events = daemon.browse(&format!("{}.local.", super::PLAYER_SERVICE_TYPE))?;
+		let thread = std::thread::spawn(move || {
+			let mut announced = Announced::default();
+			while let Ok(event) = events.recv() {
+				match event {
+					ServiceEvent::ServiceResolved(info) => {
+						// IPv4 only, never loopback; the lowest address keeps the
+						// choice stable.
+						let Some(ip) = info
+							.get_addresses_v4()
+							.into_iter()
+							.filter(|ip| !ip.is_loopback())
+							.min()
+						else {
+							continue;
+						};
+						let ip = IpAddr::V4(ip);
+						let instance = instance_of(info.get_fullname());
+						let txt: Vec<(String, String)> = info
+							.get_properties()
+							.iter()
+							.map(|p| (p.key().to_string(), p.val_str().to_string()))
+							.collect();
+						if let Some(old) = announced.insert(&instance, ip) {
+							tracker.withdraw(old);
+						}
+						tracker.announce(ip, &super::announcement(&instance, &txt));
+					}
+					ServiceEvent::ServiceRemoved(_, fullname) => {
+						if let Some(ip) = announced.remove(&instance_of(&fullname)) {
+							tracker.withdraw(ip);
+						}
+					}
+					_ => {}
+				}
+			}
+		});
+		Ok(Browser {
+			daemon,
+			thread: Some(thread),
+		})
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -459,6 +1076,134 @@ mod tests {
 		fn assert_send<T: Send>() {}
 		assert_send::<BonjourGuard>();
 		assert_send::<BonjourWatch>();
+		assert_send::<BrowseGuard>();
+	}
+
+	#[test]
+	fn parse_txt_reads_length_prefixed_pairs() {
+		let bytes =
+			b"\x07proto=1\x18product=SpritzPlayer/1.2\x12platform=tvOS 26.0\x0emodel=Apple TV";
+		assert_eq!(
+			parse_txt(bytes),
+			vec![
+				("proto".to_string(), "1".to_string()),
+				("product".to_string(), "SpritzPlayer/1.2".to_string()),
+				("platform".to_string(), "tvOS 26.0".to_string()),
+				("model".to_string(), "Apple TV".to_string()),
+			]
+		);
+	}
+
+	#[test]
+	fn parse_txt_survives_garbage() {
+		assert!(parse_txt(b"").is_empty());
+		assert!(parse_txt(b"\x00").is_empty());
+		assert_eq!(parse_txt(b"\x0atruncated"), vec![]); // claims 10 bytes, has 9
+		assert_eq!(
+			parse_txt(b"\x04flag"),
+			vec![("flag".to_string(), String::new())]
+		);
+		assert_eq!(parse_txt(b"\x04\xff\xfe=x").len(), 1);
+	}
+
+	#[test]
+	fn announcement_takes_the_known_keys() {
+		let txt = vec![
+			("proto".to_string(), "1".to_string()),
+			("product".to_string(), "SpritzPlayer/1.2".to_string()),
+			("platform".to_string(), "tvOS 26.0".to_string()),
+			("model".to_string(), "Apple TV".to_string()),
+			("extra".to_string(), "ignored".to_string()),
+		];
+		let a = announcement("Living Room", &txt);
+		assert_eq!(a.instance, "Living Room");
+		assert_eq!(a.product, "SpritzPlayer/1.2");
+		assert_eq!(a.platform, "tvOS 26.0");
+		assert_eq!(a.model, "Apple TV");
+	}
+
+	#[test]
+	fn a_removed_player_withdraws_exactly_its_address() {
+		let tv: std::net::IpAddr = "192.168.1.40".parse().unwrap();
+		let phone: std::net::IpAddr = "192.168.1.41".parse().unwrap();
+		let mut announced = Announced::default();
+		assert_eq!(announced.insert("Living Room", tv), None);
+		assert_eq!(announced.insert("Phone", phone), None);
+		assert_eq!(announced.remove("Living Room"), Some(tv));
+		assert_eq!(announced.remove("Living Room"), None);
+		// A player that moved withdraws its old address.
+		assert_eq!(announced.insert("Phone", tv), Some(phone));
+		// Two instances on one address: only the last one out withdraws it.
+		assert_eq!(announced.insert("Bedroom", tv), None);
+		assert_eq!(announced.remove("Phone"), None);
+		assert_eq!(announced.remove("Bedroom"), Some(tv));
+	}
+
+	#[cfg(target_os = "macos")]
+	#[test]
+	fn players_are_keyed_by_a_non_loopback_ipv4_address() {
+		// sockaddr_in: sin_len 16, AF_INET, port, 192.168.1.40, zero padding.
+		let v4 = [16, 2, 0, 0, 192, 168, 1, 40, 0, 0, 0, 0, 0, 0, 0, 0];
+		assert_eq!(
+			browse::player_ipv4(&v4),
+			Some(std::net::Ipv4Addr::new(192, 168, 1, 40))
+		);
+		let loopback = [16, 2, 0, 0, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+		assert_eq!(browse::player_ipv4(&loopback), None);
+		// sockaddr_in6 for fe80::1 (spike S3 saw the Apple TV here too).
+		let mut v6 = [0_u8; 28];
+		v6[0] = 28;
+		v6[1] = 30;
+		v6[8] = 0xfe;
+		v6[9] = 0x80;
+		v6[23] = 1;
+		assert_eq!(browse::player_ipv4(&v6), None);
+		assert_eq!(browse::player_ipv4(&v4[..4]), None);
+	}
+
+	#[cfg(target_os = "macos")]
+	#[tokio::test]
+	#[ignore = "needs mDNSResponder; run by hand"]
+	async fn browsing_sees_a_local_player_advertisement() {
+		let tracker = dlna::clients::ClientTracker::default();
+		let _browse = browse_players(tracker.clone()).unwrap();
+		let pairs = [
+			("proto", "1".to_string()),
+			("product", "SpritzPlayer/9.9".to_string()),
+			("platform", "tvOS 26.0".to_string()),
+			("model", "Apple TV".to_string()),
+		];
+		let status = Arc::new(Mutex::new(BonjourStatus::Pending));
+		let player =
+			imp::register(PLAYER_SERVICE_TYPE, "Browse Test", 9, &pairs, None, status).unwrap();
+		let deadline = std::time::Instant::now() + Duration::from_secs(10);
+		let ip = loop {
+			if let Some(r) = tracker
+				.snapshot()
+				.into_iter()
+				.find(|r| r.device_name == "Browse Test" && r.announced.is_some())
+			{
+				break r.ip;
+			}
+			assert!(
+				std::time::Instant::now() < deadline,
+				"no announcement: {:?}",
+				tracker.snapshot()
+			);
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		};
+		// This Mac's LAN address, not loopback or IPv6 link-local.
+		assert!(ip.is_ipv4() && !ip.is_loopback(), "{ip}");
+		drop(player);
+		let deadline = std::time::Instant::now() + Duration::from_secs(10);
+		while tracker
+			.snapshot()
+			.iter()
+			.any(|r| r.ip == ip && r.announced.is_some())
+		{
+			assert!(std::time::Instant::now() < deadline, "not withdrawn");
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
 	}
 
 	#[cfg(target_os = "macos")]
