@@ -139,12 +139,15 @@ not get through:
 - The server advertises itself over Bonjour as `_spritz._tcp` (through mDNSResponder on macOS,
   so a sleeping Mac stays reachable through the Bonjour Sleep Proxy when "Wake for network
   access" is on).
+- It sees Spritz players that advertise `_spritz-player._tcp`, so it can report a player that is
+  on the network but never connects.
 - It tells you on the terminal which Spritz clients searched for it and how far they got, and
   warns about network problems it can see (no LAN address, a VPN carrying the advertised
   address, Local Network access denied on macOS, UDP 1900 taken):
 
       Client: Apple TV (tvOS 26.0) at 192.168.1.40 found this server
       Client 192.168.1.41: tvOS searched for this server but never connected. Check the firewall on this Mac (port 8080).
+      Client: Apple TV (tvOS 26.6) at 192.168.1.40 is on the network
 
 The full protocol is in [PROTOCOL.md](PROTOCOL.md).
 
