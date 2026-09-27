@@ -1,6 +1,8 @@
 [workspace]
-# Binary app — none of the crates go to crates.io.
-publish = false
+# Binary app — none of the crates go to crates.io. git_only also makes release-plz read
+# the current version from our `v…` tags instead of crates.io, where unrelated crates
+# called `cli`, `api` and `dlna` live (comparing against those produced stale changelogs).
+git_only = true
 # Skip cargo-semver-checks; relevant only for public library APIs.
 semver_check = false
 # Annotated tag per release (release-plz creates annotated tags by default).
@@ -21,20 +23,29 @@ changelog_path = "./CHANGELOG.md"
 # but only one (`cli`, the user-facing binary) gets a git tag and GitHub
 # Release. Without this, every crate tries to create the same tag name
 # and the second one hits a 422 "Reference already exists".
+# The changelog and the release belong to `cli`, but most changes land in the library
+# crates, so its changelog includes their commits.
+[[package]]
+name = "cli"
+changelog_include = ["spritz-core", "api", "dlna"]
+
 [[package]]
 name = "spritz-core"
 git_tag_enable = false
 git_release_enable = false
+changelog_update = false
 
 [[package]]
 name = "api"
 git_tag_enable = false
 git_release_enable = false
+changelog_update = false
 
 [[package]]
 name = "dlna"
 git_tag_enable = false
 git_release_enable = false
+changelog_update = false
 
 [changelog]
 header = """# Changelog
