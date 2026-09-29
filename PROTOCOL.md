@@ -1,3 +1,5 @@
+<!-- Published copy: edit protocol/PROTOCOL.md in spritz-docs and run bin/publish-protocol there, not this file. -->
+
 # The spritz protocol
 
 Spritz speaks DLNA to everything. The spritz protocol is a small layer that Spritz servers and
