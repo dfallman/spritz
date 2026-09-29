@@ -14,7 +14,7 @@ Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900` (IPv4) and `[F
 
 `POST /upnp/control/contentdirectory` handles `Browse`, `Search`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. The root has three children: `V` (Videos, flat), `A` (Music, flat), and `F` (By folder, recursive). Empty containers are hidden. `<res>` tags include `size=`, `duration=` when the container header can be parsed, `resolution=` when width/height are known, a `DLNA.ORG_PN` only when the probed codec is a known DLNA profile (H.264 bands; HEVC/VP9/AV1 omit the PN rather than lie), and DLNA.ORG flags (`OP=01` byte-seek plus standard streaming flags). Matching sidecar subtitles (`.srt` / `.vtt` / `.ass`) are extra `<res>` URLs. Sidecar covers (`cover.jpg` / same-stem `.jpg`) appear as `<upnp:albumArtURI>` pointing at `/art/{index}`. File responses set `transferMode.dlna.org: Streaming` and `contentFeatures.dlna.org` so Infuse will play them.
 
-A `SUBSCRIBE` to an event URL is answered with a SID and an immediate HTTP `NOTIFY` carrying the current state variables (`SystemUpdateID` stays `1` because the library is scanned once at start).
+A `SUBSCRIBE` to an event URL is answered with a SID and an immediate HTTP `NOTIFY` carrying the current state variables. `SystemUpdateID` lives in `EventHub` and starts at `1`. The CLI scans once at start, so for it the value never changes. An embedder that swaps the library (Spritz Server) calls `EventHub::content_changed`, which bumps the id, reports it in `GetSystemUpdateID` and in Browse/Search `UpdateID`, and sends a `NOTIFY` (SEQ 1, 2, …) to every live ContentDirectory subscriber.
 
 `GET /upnp/icon.png` is a 48×48 PNG listed in `iconList` on the device description.
 
