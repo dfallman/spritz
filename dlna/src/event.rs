@@ -4,8 +4,10 @@ use axum::{
 	http::{HeaderMap, StatusCode},
 	response::Response,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
@@ -22,9 +24,110 @@ pub enum EventService {
 	MediaReceiverRegistrar,
 }
 
-#[derive(Clone, Default)]
+/// Eventing state shared by every copy of a server's `DlnaConfig`.
+#[derive(Clone)]
 pub struct EventHub {
+	/// Every live subscription: SID to expiry.
 	inner: Arc<Mutex<HashMap<String, Instant>>>,
+	/// `ContentDirectory` subscribers, to notify when the library changes.
+	content: Arc<Mutex<HashMap<String, ContentSubscriber>>>,
+	/// `ContentDirectory` `SystemUpdateID`. Starts at 1; only a server that
+	/// swaps its library bumps it (see [`EventHub::content_changed`]).
+	system_update_id: Arc<AtomicU32>,
+}
+
+struct ContentSubscriber {
+	callback: String,
+	/// SEQ for the next NOTIFY. The initial event on SUBSCRIBE is 0.
+	next_seq: u32,
+}
+
+impl Default for EventHub {
+	fn default() -> Self {
+		Self {
+			inner: Arc::default(),
+			content: Arc::default(),
+			system_update_id: Arc::new(AtomicU32::new(1)),
+		}
+	}
+}
+
+impl EventHub {
+	/// The current `ContentDirectory` `SystemUpdateID`.
+	#[must_use]
+	pub fn system_update_id(&self) -> u32 {
+		self.system_update_id.load(Ordering::SeqCst)
+	}
+
+	/// Remember a new `ContentDirectory` subscriber, dropping any whose
+	/// subscription has lapsed, so this map stays within the subscription cap
+	/// even on a server that never calls `content_changed`.
+	fn track_content_subscriber(&self, sid: &str, callback: String) {
+		let live: HashSet<String> = self
+			.inner
+			.lock()
+			.map(|map| map.keys().cloned().collect())
+			.unwrap_or_default();
+		if let Ok(mut subs) = self.content.lock() {
+			subs.retain(|s, _| live.contains(s));
+			subs.insert(
+				sid.to_string(),
+				ContentSubscriber {
+					callback,
+					next_seq: 1,
+				},
+			);
+		}
+	}
+
+	/// Record that the library changed: bump `SystemUpdateID` and tell every
+	/// live `ContentDirectory` subscriber, so renderers that cache Browse
+	/// results refresh. The id changes before this returns. The future sends
+	/// the NOTIFYs and resolves once each is delivered or has timed out; it
+	/// needs a Tokio runtime.
+	pub fn content_changed(&self) -> impl Future<Output = ()> + Send + 'static {
+		let id = self
+			.system_update_id
+			.fetch_add(1, Ordering::SeqCst)
+			.wrapping_add(1);
+		let now = Instant::now();
+		let live: HashSet<String> = self
+			.inner
+			.lock()
+			.map(|map| {
+				map.iter()
+					.filter(|(_, expires)| **expires > now)
+					.map(|(sid, _)| sid.clone())
+					.collect()
+			})
+			.unwrap_or_default();
+		let targets: Vec<(String, String, u32)> = self
+			.content
+			.lock()
+			.map(|mut subs| {
+				subs.retain(|sid, _| live.contains(sid));
+				subs.iter_mut()
+					.map(|(sid, sub)| {
+						let seq = sub.next_seq;
+						// SEQ wraps to 1; 0 is reserved for the initial event.
+						sub.next_seq = sub.next_seq.checked_add(1).unwrap_or(1);
+						(sid.clone(), sub.callback.clone(), seq)
+					})
+					.collect()
+			})
+			.unwrap_or_default();
+		let body = cd_event_body(id);
+		async move {
+			let mut sends = tokio::task::JoinSet::new();
+			for (sid, callback, seq) in targets {
+				let body = body.clone();
+				sends.spawn(async move {
+					let _ = send_notify(&callback, &sid, seq, &body).await;
+				});
+			}
+			while sends.join_next().await.is_some() {}
+		}
+	}
 }
 
 pub fn parse_callback_url(header: &str) -> Option<String> {
@@ -71,8 +174,8 @@ pub fn propertyset(pairs: &[(&str, &str)]) -> String {
 	)
 }
 
-pub fn cd_event_body() -> String {
-	propertyset(&[("SystemUpdateID", "1")])
+pub fn cd_event_body(system_update_id: u32) -> String {
+	propertyset(&[("SystemUpdateID", &system_update_id.to_string())])
 }
 
 pub fn cm_event_body(source: &str) -> String {
@@ -92,9 +195,13 @@ pub fn mrr_event_body() -> String {
 	])
 }
 
-pub fn event_body_for(service: EventService, source_protocol_info: &str) -> String {
+pub fn event_body_for(
+	service: EventService,
+	source_protocol_info: &str,
+	system_update_id: u32,
+) -> String {
 	match service {
-		EventService::ContentDirectory => cd_event_body(),
+		EventService::ContentDirectory => cd_event_body(system_update_id),
 		EventService::ConnectionManager => cm_event_body(source_protocol_info),
 		EventService::MediaReceiverRegistrar => mrr_event_body(),
 	}
@@ -176,7 +283,10 @@ async fn subscribe(
 				.body(Body::empty())
 				.unwrap();
 		}
-		let body = event_body_for(service, &source_protocol_info);
+		if service == EventService::ContentDirectory {
+			hub.track_content_subscriber(&sid, callback.clone());
+		}
+		let body = event_body_for(service, &source_protocol_info, hub.system_update_id());
 		let sid_notify = sid.clone();
 		tokio::spawn(async move {
 			let _ = send_notify(&callback, &sid_notify, 0, &body).await;
@@ -253,10 +363,13 @@ fn normalize_ip(ip: IpAddr) -> IpAddr {
 }
 
 fn unsubscribe(headers: &HeaderMap, hub: EventHub) -> Response {
-	if let Some(sid) = headers.get("sid").and_then(|v| v.to_str().ok())
-		&& let Ok(mut map) = hub.inner.lock()
-	{
-		map.remove(sid);
+	if let Some(sid) = headers.get("sid").and_then(|v| v.to_str().ok()) {
+		if let Ok(mut map) = hub.inner.lock() {
+			map.remove(sid);
+		}
+		if let Ok(mut subs) = hub.content.lock() {
+			subs.remove(sid);
+		}
 	}
 	Response::builder()
 		.status(200)
@@ -373,8 +486,8 @@ mod tests {
 
 	#[test]
 	fn propertyset_wraps_state_variables() {
-		let xml = cd_event_body();
-		assert!(xml.contains("<SystemUpdateID>1</SystemUpdateID>"));
+		let xml = cd_event_body(7);
+		assert!(xml.contains("<SystemUpdateID>7</SystemUpdateID>"));
 		assert!(xml.contains("urn:schemas-upnp-org:event-1-0"));
 	}
 
@@ -405,6 +518,96 @@ mod tests {
 		assert!(req.contains("SID: uuid:abc"), "{req}");
 		assert!(req.contains("SEQ: 0"), "{req}");
 		assert!(req.contains("NTS: upnp:propchange"), "{req}");
+	}
+
+	async fn next_request(listener: &tokio::net::TcpListener) -> String {
+		use tokio::io::AsyncReadExt;
+		let (mut sock, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+			.await
+			.expect("no NOTIFY within 2 s")
+			.unwrap();
+		let mut req = String::new();
+		sock.read_to_string(&mut req).await.unwrap();
+		req
+	}
+
+	async fn subscribe_from_localhost(
+		hub: &EventHub,
+		service: EventService,
+		listener: &tokio::net::TcpListener,
+	) -> String {
+		let mut headers = HeaderMap::new();
+		let callback = format!("<http://{}/evt>", listener.local_addr().unwrap());
+		headers.insert("callback", callback.parse().unwrap());
+		let peer = "127.0.0.1".parse().ok();
+		let res = subscribe(&headers, hub.clone(), service, String::new(), peer).await;
+		assert_eq!(res.status(), 200);
+		res.headers()["sid"].to_str().unwrap().to_string()
+	}
+
+	#[tokio::test]
+	async fn content_changed_bumps_the_id_and_notifies_content_directory_subscribers() {
+		let cd = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let cm = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let hub = EventHub::default();
+		assert_eq!(hub.system_update_id(), 1);
+
+		subscribe_from_localhost(&hub, EventService::ContentDirectory, &cd).await;
+		subscribe_from_localhost(&hub, EventService::ConnectionManager, &cm).await;
+		assert!(
+			next_request(&cd)
+				.await
+				.contains("<SystemUpdateID>1</SystemUpdateID>")
+		);
+		assert!(next_request(&cm).await.contains("SEQ: 0"));
+
+		hub.content_changed().await;
+		assert_eq!(hub.system_update_id(), 2);
+		let req = next_request(&cd).await;
+		assert!(req.contains("SEQ: 1"), "{req}");
+		assert!(req.contains("<SystemUpdateID>2</SystemUpdateID>"), "{req}");
+		assert!(
+			tokio::time::timeout(Duration::from_millis(200), cm.accept())
+				.await
+				.is_err(),
+			"only ContentDirectory subscribers hear about library changes"
+		);
+
+		hub.content_changed().await;
+		let req = next_request(&cd).await;
+		assert!(req.contains("SEQ: 2"), "{req}");
+		assert!(req.contains("<SystemUpdateID>3</SystemUpdateID>"), "{req}");
+	}
+
+	#[tokio::test]
+	async fn expired_content_subscribers_are_pruned_on_subscribe() {
+		let cd = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let hub = EventHub::default();
+		let first = subscribe_from_localhost(&hub, EventService::ContentDirectory, &cd).await;
+		// Expire the first subscription, as time passing would.
+		hub.inner.lock().unwrap().remove(&first);
+
+		subscribe_from_localhost(&hub, EventService::ContentDirectory, &cd).await;
+		assert_eq!(hub.content.lock().unwrap().len(), 1);
+	}
+
+	#[tokio::test]
+	async fn unsubscribed_clients_hear_nothing_more() {
+		let cd = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let hub = EventHub::default();
+		let sid = subscribe_from_localhost(&hub, EventService::ContentDirectory, &cd).await;
+		next_request(&cd).await;
+
+		let mut headers = HeaderMap::new();
+		headers.insert("sid", sid.parse().unwrap());
+		assert_eq!(unsubscribe(&headers, hub.clone()).status(), 200);
+
+		hub.content_changed().await;
+		assert!(
+			tokio::time::timeout(Duration::from_millis(200), cd.accept())
+				.await
+				.is_err()
+		);
 	}
 
 	#[test]
