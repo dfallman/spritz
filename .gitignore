@@ -22,6 +22,7 @@ target
 
 # Claude Code local project state — not meant to be shared
 .claude/
+.cursor/
 docs
 # macOS
 .DS_Store
