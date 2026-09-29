@@ -51,7 +51,7 @@ fn main() {
 		std::thread::sleep(std::time::Duration::from_secs(3));
 		show("absent (2)", lan.ip, extra);
 	}
-	let input = api::netcheck::gather(std::net::IpAddr::V4(lan.ip), true, true);
+	let input = api::netcheck::gather(std::net::IpAddr::V4(lan.ip), true, true, false);
 	println!("lan_probe: {:?}", input.lan);
 	for c in api::netcheck::evaluate(&input) {
 		println!("{:?} {}: {}", c.severity, c.id, c.message);
