@@ -104,9 +104,17 @@ Options:
   -p, --port <PORT>  Port to listen on [default: 8080]
       --bind <BIND>  Address to bind (a specific interface IP on multi-homed hosts) [default: 0.0.0.0]
   -n, --name <NAME>  Friendly name shown to DLNA clients [default: "Spritz Media Server"]
+      --allow-remote Also answer devices outside the local network. There is no password:
+                     anyone who can reach this computer can browse and stream the folders
   -h, --help         Print help
   -V, --version      Print version
 ```
+
+DLNA has no authentication, so spritz only answers devices on the local network: loopback,
+private IPv4 ranges, `100.64.0.0/10` (Tailscale), link-local, IPv6 unique-local, and any address
+on a subnet this computer is directly attached to. Anything else gets `403 Forbidden`, and the
+first refusal per address is logged. `--allow-remote` turns this off; a `public-address` warning
+then names any public address the computer has.
 
 ## Examples
 
@@ -214,6 +222,8 @@ Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 # Troubleshooting
 
 DLNA is fiddly by nature, especially in combination with certain devices and operating systems (looking at you, Apple TV).
+
+If a client gets `403 Forbidden` and the log says `Refused <address>: not on the local network`, that client reaches this computer from outside its local subnets (a routed VLAN, a public IPv6 address from another network). Use `--allow-remote` if that is intended.
 
 If your client can't find Spritz, check your firewall rules first (on both the server and client side, but typically the server side): SSDP needs UDP 1900 open, and HTTP needs your serving port (8080 by default).
 
