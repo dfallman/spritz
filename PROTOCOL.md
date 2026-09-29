@@ -22,7 +22,7 @@ app bundle and an iCloud entitlement, so only Spritz Server publishes it.
 {
   "protocol": 1,
   "server": "spritz",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "name": "Daniel's Mac mini",
   "uuid": "uuid:6f1c…",
   "port": 8080,
@@ -86,6 +86,19 @@ app bundle and an iCloud entitlement, so only Spritz Server publishes it.
   carry a terminal escape sequence. (hyper already rejects ESC in HTTP header values, so a raw
   escape can only arrive in the SSDP `USER-AGENT`; over HTTP the risk is C1 controls and bidi
   characters inside UTF-8. Both paths are sanitised.)
+
+### Who the server answers
+
+DLNA has no authentication, so reachability is the only access control. Every HTTP route, the
+identity endpoint included, answers only local peers by default: loopback, private IPv4,
+`100.64.0.0/10`, link-local, IPv6 unique-local, and any address on a subnet the server is directly
+attached to. Anything else gets `403 Forbidden`, and the first refusal per address is logged. The
+CLI's `--allow-remote` and Spritz Server's "Answer devices outside this network" setting turn the
+filter off; the `public-address` check (Network self-checks, below) then warns when this computer
+has a public address. SSDP is not filtered: it answers only on the multicast groups and to M-SEARCH
+senders, and the `LOCATION` it hands out is behind the filter. A Player on the same network is
+unaffected, and its subnet sweep probes only private ranges anyway. Added in spritz 0.2.0 without a
+`protocol` bump, since no local client sees a difference.
 
 ### Compatibility rules
 
@@ -217,6 +230,7 @@ last 600 s) covers it on purpose.
 | `vpn-active` | Warning | The advertised IP is on a tunnel interface. With the default bind, the advertised IP comes from the default route, so this also means "the default route goes through the tunnel". |
 | `vpn-active` | Info | A tunnel interface holds an IPv4 address but is not the advertised one: "VPN interface {name} is active; Spritz advertises {ip} on {lan-if}." This keeps Tailscale, ZeroTier and split-tunnel users from a permanent orange dot. |
 | `multiple-subnets` | Info | More than one LAN IPv4 subnet. The message names each and the advertised one. |
+| `public-address` | Warning | Devices outside the local network are allowed (`--allow-remote`, or the app setting) and this computer has a public address. The message lists the addresses. Never raised with the default filter on, since the filter already refuses those peers. |
 
 Interface classes: **tunnel** is `utun*`, `ipsec*`, `ppp*`, `tun*`, `wg*`, `feth*` (ZeroTier on
 macOS), `zt*` and `tailscale*`; **virtual** is a host-only VM or container bridge: `bridge*`
