@@ -23,6 +23,7 @@ use uuid::Uuid;
 pub mod bonjour;
 pub mod identity;
 pub mod netcheck;
+pub mod peers;
 pub mod report;
 pub mod track;
 
@@ -33,11 +34,14 @@ pub struct AppState {
 	pub media_files: Vec<PathBuf>,
 }
 
+/// `allow_remote`: also answer peers outside the local network (see
+/// [`peers::local_only`]); off by default in the CLI.
 pub async fn start_server(
 	port: u16,
 	bind: IpAddr,
 	name: &str,
 	media_dirs: Vec<PathBuf>,
+	allow_remote: bool,
 ) -> anyhow::Result<()> {
 	let media_dirs = unique_canonical_roots(&media_dirs);
 	if media_dirs.is_empty() {
@@ -198,6 +202,15 @@ pub async fn start_server(
 			track::track_clients,
 		))
 		.with_state(Arc::clone(&state));
+	// Outermost, so refused peers are neither tracked nor logged as access.
+	let app = if allow_remote {
+		app
+	} else {
+		app.layer(middleware::from_fn_with_state(
+			peers::PeerFilter::default(),
+			peers::local_only,
+		))
+	};
 
 	// Bind happened before the scan so a busy port fails fast. HTTP and SSDP
 	// start with empty duration and resolution; `spawn_probe` fills those in.
@@ -263,7 +276,7 @@ pub async fn start_server(
 			let bonjour_ok = bonjour_watch
 				.as_ref()
 				.is_some_and(|w| !matches!(w.status(), bonjour::BonjourStatus::Failed(_)));
-			netcheck::gather(ip, ssdp_ok, bonjour_ok)
+			netcheck::gather(ip, ssdp_ok, bonjour_ok, allow_remote)
 		},
 		|before, after| {
 			for check in netcheck::new_checks(before, after) {

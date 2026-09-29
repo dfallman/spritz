@@ -56,6 +56,9 @@ pub struct CheckInput {
 	pub ssdp: bool,
 	pub bonjour: bool,
 	pub lan: LanProbe,
+	/// Public addresses this machine answers on because remote peers are
+	/// allowed; empty when only local peers are (the default).
+	pub exposed: Vec<IpAddr>,
 }
 
 const TUNNEL_PREFIXES: [&str; 8] = [
@@ -209,6 +212,17 @@ pub fn evaluate(input: &CheckInput) -> Vec<Check> {
 		});
 	}
 	checks.extend(vpn_check(input));
+	if !input.exposed.is_empty() {
+		let list: Vec<String> = input.exposed.iter().map(ToString::to_string).collect();
+		checks.push(Check {
+			id: "public-address",
+			severity: Severity::Warning,
+			message: format!(
+				"Devices outside the local network are allowed, and this computer has a public address ({}). Anyone who can reach it can browse and stream the shared folders.",
+				list.join(", ")
+			),
+		});
+	}
 	let mut subnets: Vec<(u32, u32)> = lan.iter().map(|i| network(i)).collect();
 	subnets.sort_unstable();
 	subnets.dedup();
@@ -333,8 +347,9 @@ pub fn lan_probe(ifaces: &[Iface], advertised: IpAddr) -> LanProbe {
 	classify(&probe_host(iface.ip, target, false))
 }
 
+/// `allow_remote`: remote peers are allowed, so public addresses are worth a warning.
 #[must_use]
-pub fn gather(advertised: IpAddr, ssdp: bool, bonjour: bool) -> CheckInput {
+pub fn gather(advertised: IpAddr, ssdp: bool, bonjour: bool, allow_remote: bool) -> CheckInput {
 	let interfaces = interfaces();
 	let lan = lan_probe(&interfaces, advertised);
 	CheckInput {
@@ -343,6 +358,11 @@ pub fn gather(advertised: IpAddr, ssdp: bool, bonjour: bool) -> CheckInput {
 		ssdp,
 		bonjour,
 		lan,
+		exposed: if allow_remote {
+			crate::peers::public_addresses()
+		} else {
+			Vec::new()
+		},
 	}
 }
 
@@ -411,11 +431,28 @@ mod tests {
 			ssdp: true,
 			bonjour: true,
 			lan: LanProbe::Ok,
+			exposed: Vec::new(),
 		}
 	}
 
 	fn ids(checks: &[Check]) -> Vec<&'static str> {
 		checks.iter().map(|c| c.id).collect()
+	}
+
+	#[test]
+	fn public_addresses_warn_only_when_exposed() {
+		let lan = vec![iface("en0", "192.168.1.23", "255.255.255.0")];
+		assert!(!ids(&evaluate(&input(lan.clone()))).contains(&"public-address"));
+
+		let mut open = input(lan);
+		open.exposed = vec!["2001:db8::5".parse().unwrap()];
+		let checks = evaluate(&open);
+		let check = checks
+			.iter()
+			.find(|c| c.id == "public-address")
+			.expect("warning");
+		assert_eq!(check.severity, Severity::Warning);
+		assert!(check.message.contains("2001:db8::5"), "{}", check.message);
 	}
 
 	#[test]

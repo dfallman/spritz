@@ -22,6 +22,11 @@ struct Cli {
 	/// Friendly name shown to DLNA clients
 	#[arg(short, long, default_value = "Spritz Media Server")]
 	name: String,
+
+	/// Also answer devices outside the local network. There is no password:
+	/// anyone who can reach this computer can browse and stream the folders.
+	#[arg(long)]
+	allow_remote: bool,
 }
 
 #[tokio::main]
@@ -48,7 +53,9 @@ async fn main() -> anyhow::Result<()> {
 		}
 	}
 
-	if let Err(e) = api::start_server(cli.port, cli.bind, &cli.name, folders).await {
+	if let Err(e) =
+		api::start_server(cli.port, cli.bind, &cli.name, folders, cli.allow_remote).await
+	{
 		tracing::error!("Server error: {e}");
 		std::process::exit(1);
 	}

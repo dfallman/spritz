@@ -29,7 +29,7 @@ pub async fn handle_contentdirectory(
 		"GetSystemUpdateID" => soap::ok(soap::response(
 			"GetSystemUpdateID",
 			CD_SERVICE,
-			"<Id>1</Id>",
+			&format!("<Id>{}</Id>", config.event_hub.system_update_id()),
 		)),
 		"GetSearchCapabilities" => soap::ok(soap::response(
 			"GetSearchCapabilities",
@@ -272,8 +272,9 @@ fn browse(headers: &HeaderMap, body: &str, config: &DlnaConfig) -> Response {
 		"<Result>{}</Result>\
 		<NumberReturned>{returned}</NumberReturned>\
 		<TotalMatches>{total_matches}</TotalMatches>\
-		<UpdateID>1</UpdateID>",
+		<UpdateID>{}</UpdateID>",
 		xml_escape(&didl),
+		config.event_hub.system_update_id(),
 	);
 	soap::ok(soap::response("Browse", CD_SERVICE, &inner))
 }
@@ -328,8 +329,9 @@ fn search(headers: &HeaderMap, body: &str, config: &DlnaConfig) -> Response {
 		"<Result>{}</Result>\
 		<NumberReturned>{returned}</NumberReturned>\
 		<TotalMatches>{total}</TotalMatches>\
-		<UpdateID>1</UpdateID>",
+		<UpdateID>{}</UpdateID>",
 		xml_escape(&didl),
+		config.event_hub.system_update_id(),
 	);
 	soap::ok(soap::response("Search", CD_SERVICE, &inner))
 }
@@ -780,6 +782,74 @@ mod tests {
 			"audio/mpeg",
 			r#"upnp:class derivedfrom "object.item.audioItem""#
 		));
+	}
+
+	fn empty_config() -> Arc<DlnaConfig> {
+		Arc::new(DlnaConfig {
+			device_uuid: "u".into(),
+			friendly_name: "Spritz".into(),
+			http_port: 8080,
+			local_ip: "127.0.0.1".parse().unwrap(),
+			http_ipv4: true,
+			http_ipv6: false,
+			media_dirs: vec![],
+			media_files: vec![],
+			media_sizes: vec![],
+			media_dates: vec![],
+			probes: crate::ProbeCache::empty(0),
+			media_has_art: vec![],
+			media_subs: vec![],
+			video_idx: vec![],
+			audio_idx: vec![],
+			folder_nodes: vec![],
+			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
+		})
+	}
+
+	async fn soap_call(config: &Arc<DlnaConfig>, action: &str, body: &str) -> String {
+		let mut headers = HeaderMap::new();
+		let soapaction = format!("\"{CD_SERVICE}#{action}\"");
+		headers.insert("soapaction", soapaction.parse().unwrap());
+		let res = handle_contentdirectory(headers, body.to_string(), Arc::clone(config)).await;
+		let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+			.await
+			.unwrap();
+		String::from_utf8(bytes.to_vec()).unwrap()
+	}
+
+	#[tokio::test]
+	async fn update_ids_follow_the_event_hub() {
+		let config = empty_config();
+		let browse = "<ObjectID>0</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag>";
+		assert!(
+			soap_call(&config, "GetSystemUpdateID", "")
+				.await
+				.contains("<Id>1</Id>")
+		);
+		assert!(
+			soap_call(&config, "Browse", browse)
+				.await
+				.contains("<UpdateID>1</UpdateID>")
+		);
+
+		config.event_hub.content_changed().await;
+		assert!(
+			soap_call(&config, "GetSystemUpdateID", "")
+				.await
+				.contains("<Id>2</Id>")
+		);
+		assert!(
+			soap_call(&config, "Browse", browse)
+				.await
+				.contains("<UpdateID>2</UpdateID>")
+		);
+		let search = "<ContainerID>0</ContainerID><SearchCriteria>*</SearchCriteria>";
+		assert!(
+			soap_call(&config, "Search", search)
+				.await
+				.contains("<UpdateID>2</UpdateID>")
+		);
 	}
 
 	#[test]
