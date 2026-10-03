@@ -139,7 +139,7 @@ spritz --bind 192.168.1.10 --name "Living Room" /media/videos
 
 ## Finding the server when DLNA discovery fails
 
-Besides SSDP, spritz speaks a small spritz protocol that Spritz players use when multicast does
+Besides SSDP, spritz speaks a small spritz protocol that Spritz players (to be released!) use when multicast does
 not get through:
 
 - `GET /.well-known/spritz` returns who this server is (name, UPnP UDN, port, LAN addresses,
