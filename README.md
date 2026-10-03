@@ -256,7 +256,6 @@ New-NetFirewallRule -DisplayName "Spritz SSDP" `
 **Known issue:** SSDP multicast sometimes requires elevated privileges under WSL2. If devices don't auto-discover the server, you could try granting the binary `CAP_NET_RAW` or (as a last resort) `sudo spritz`. HTTP file serving and the M3U endpoint work either way.
 
 # Architecture
-
 Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library. At a glance:
 
 - **Discovery (SSDP).** Sends `ssdp:alive` on IPv4 and IPv6 on startup, responds to `M-SEARCH`, and sends `ssdp:byebye` on exit.
@@ -266,13 +265,8 @@ Spritz implements DLNA/UPnP AV directly instead of wrapping an existing library.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full protocol walkthrough.
 
-## Note on AI use
-
-I've been writing code for over 30 years, and lately LLM agent-assisted coding has rekindled my sense of awe at what's possible. This project was built in Rust using a range of tools, including Anthropic's Claude Code. For me, these tools are simply means to move faster, explore more ideas, and test those ideas and implementations more rigorously than I could on my own.
-
-## Contributing
-
-Issues and pull requests welcome. For bugs, please include your client device/OS, firewall setup, and the terminal output of `spritz` when the client tries to connect.
+## How it's made
+Gitst is written in Rust, with help from tools like Anthropic's Claude Code. I've been writing code for over 30 years, and working with coding agents has rekindled my sense of awe at what code can do. They let me move faster, try more ideas, and test them more thoroughly than I would on my own.
 
 ## License
 
