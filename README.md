@@ -9,7 +9,7 @@
 Run `spritz` in a folder, such as `~/Media`, and all video and audio files recursively and instantly show up on the TVs, phones, and speakers on your local network. Unlike most [DLNA](https://en.wikipedia.org/wiki/DLNA) servers, Spritz also checks your network and tells you when something will keep devices from finding it, like a VPN, a blocked port, or macOS denying Local Network access.
 
 <p align="center">
-  <img width="600" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
+  <img width="700" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
 </p>
 
 ### Quick start
