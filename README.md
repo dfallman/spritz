@@ -4,7 +4,7 @@
 [![release](https://img.shields.io/github/v/release/dfallman/spritz)](https://github.com/dfallman/spritz/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Spritz is a nano DLNA media server for the terminal. No setup, no config.
+**Spritz is a nano DLNA media server for the terminal. No setup, no config**.
 
 Run it in a folder, and its video and audio files show up on the TVs, phones, and speakers on your local network.
 
