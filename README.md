@@ -4,11 +4,13 @@
 [![release](https://img.shields.io/github/v/release/dfallman/spritz)](https://github.com/dfallman/spritz/releases)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Spritz is a nano DLNA media server for the terminal. No setup, no config**.
+**Spritz is a nano multi-platform DLNA media server for the terminal. No setup, no config**.
 
-Run it in a folder, and its video and audio files show up on the TVs, phones, and speakers on your local network.
+Run `spritz` in a folder, such as `~/Media`, and all video and audio files recursively and instantly show up on the TVs, phones, and speakers on your local network. Unlike most [DLNA](https://en.wikipedia.org/wiki/DLNA) servers, Spritz also checks your network and tells you when something will keep devices from finding it, like a VPN, a blocked port, or macOS denying Local Network access.
 
-<img width="800" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
+<p align="center">
+  <img width="600" alt="spritz" src="https://github.com/user-attachments/assets/a021885f-d242-4118-a128-c115186879ec" />
+</p>
 
 ### Quick start
 Install:
