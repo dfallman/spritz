@@ -6,7 +6,7 @@
 
 **Spritz is a nano multi-platform DLNA media server for the terminal. No setup, no config**.
 
-Run `spritz` in a folder, such as `~/Media`, and all video and audio files instantly (and recursively) show up on the TVs, phones, and speakers on your local network. Unlike most [DLNA](https://en.wikipedia.org/wiki/DLNA) servers, Spritz also checks your network and tells you when something will keep devices from finding it, like a VPN, a blocked port, or macOS denying Local Network access.
+Run `spritz` in a folder, such as `~/Media`, and every video and audio file in it and its subfolders instantly shows up on the TVs, phones, and speakers on your local network. Unlike most [DLNA](https://en.wikipedia.org/wiki/DLNA) servers, Spritz also checks your network and tells you when something will keep devices from finding it, like a VPN, a blocked port, or macOS denying Local Network access.
 
 <p align="center">
   <img width="700" alt="spritz" src="https://github.com/user-attachments/assets/201d23e5-2c08-499e-a6c8-bb10a0788942" />
