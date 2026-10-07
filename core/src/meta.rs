@@ -163,12 +163,13 @@ pub const SUBTITLE_EXTENSIONS: [&str; 4] = ["srt", "vtt", "ass", "ssa"];
 
 /// The sidecar subtitles of each media file, as file names in its folder, aligned with `media`.
 /// A sidecar is `<stem>.<ext>` or `<stem>.<tag>[.<tag>].<ext>` with a subtitle extension in any
-/// case. When it fits several stems in the folder the longest wins, so `Movie.Part2.en.srt`
+/// case, and a stem in any case too, since a case-insensitive volume serves `the.movie.srt` as
+/// `The.Movie.srt`. When it fits several stems in the folder the longest wins, so `Movie.Part2.en.srt`
 /// belongs to `Movie.Part2.mkv`, not to `Movie.mkv`; media files sharing a stem share it.
 /// Untagged sidecars come first, in [`SUBTITLE_EXTENSIONS`] order, then tagged ones by name.
 /// Each folder is read once. Symlinks and names that are not UTF-8 are ignored.
 pub fn sidecar_subtitles(media: &[PathBuf]) -> Vec<Vec<String>> {
-	let mut folders: HashMap<&Path, HashMap<&str, Vec<usize>>> = HashMap::new();
+	let mut folders: HashMap<&Path, HashMap<String, Vec<usize>>> = HashMap::new();
 	for (i, path) in media.iter().enumerate() {
 		let (Some(dir), Some(stem)) = (path.parent(), path.file_stem().and_then(OsStr::to_str))
 		else {
@@ -177,7 +178,7 @@ pub fn sidecar_subtitles(media: &[PathBuf]) -> Vec<Vec<String>> {
 		folders
 			.entry(dir)
 			.or_default()
-			.entry(stem)
+			.entry(stem.to_lowercase())
 			.or_default()
 			.push(i);
 	}
@@ -220,9 +221,14 @@ fn subtitle_rank(name: &str) -> Option<usize> {
 }
 
 /// The media files `name` belongs to: its name without the extension as a stem, then that less
-/// its last dot component, then less two. The longest stem is tried first.
-fn sidecar_owners<'a>(name: &str, stems: &'a HashMap<&str, Vec<usize>>) -> Option<&'a Vec<usize>> {
-	let mut base = Path::new(name).file_stem()?.to_str()?;
+/// its last dot component, then less two, all lowercased like the keys of `stems`. The longest
+/// stem is tried first.
+fn sidecar_owners<'a>(
+	name: &str,
+	stems: &'a HashMap<String, Vec<usize>>,
+) -> Option<&'a Vec<usize>> {
+	let lowered = Path::new(name).file_stem()?.to_str()?.to_lowercase();
+	let mut base = lowered.as_str();
 	for _ in 0..3 {
 		if let Some(owners) = stems.get(base) {
 			return Some(owners);
@@ -234,7 +240,10 @@ fn sidecar_owners<'a>(name: &str, stems: &'a HashMap<&str, Vec<usize>>) -> Optio
 
 /// Untagged sidecars first, by extension rank; then tagged ones by name.
 fn sidecar_order(name: &str, stem: &str) -> (bool, usize, String) {
-	let tagged = Path::new(name).file_stem().and_then(OsStr::to_str) != Some(stem);
+	let tagged = Path::new(name)
+		.file_stem()
+		.and_then(OsStr::to_str)
+		.is_none_or(|own| own.to_lowercase() != stem.to_lowercase());
 	let rank = if tagged {
 		0
 	} else {
@@ -1477,6 +1486,18 @@ mod tests {
 		assert_eq!(
 			sidecar_subtitles(&[one, two, song]),
 			vec![vec!["Clip.en.srt"], vec!["Clip.sv.vtt"], vec![]]
+		);
+	}
+
+	#[test]
+	fn sidecar_subtitles_match_the_stem_in_any_case() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = touch(tmp.path(), "The.Matrix.1999.mkv");
+		touch(tmp.path(), "the.matrix.1999.srt");
+		touch(tmp.path(), "THE.MATRIX.1999.en.srt");
+		assert_eq!(
+			sidecar_subtitles(&[movie]),
+			vec![vec!["the.matrix.1999.srt", "THE.MATRIX.1999.en.srt"]]
 		);
 	}
 }
