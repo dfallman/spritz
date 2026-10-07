@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -182,6 +184,91 @@ fn is_regular_file(path: &Path) -> bool {
 	std::fs::symlink_metadata(path)
 		.ok()
 		.is_some_and(|meta| !meta.file_type().is_symlink() && meta.is_file())
+}
+
+/// Sidecar subtitle extensions, in the order a media file's untagged sidecars are listed.
+pub const SUBTITLE_EXTENSIONS: [&str; 4] = ["srt", "vtt", "ass", "ssa"];
+
+/// The sidecar subtitles of each media file, as file names in its folder, aligned with `media`.
+/// A sidecar is `<stem>.<ext>` or `<stem>.<tag>[.<tag>].<ext>` with a subtitle extension in any
+/// case. When it fits several stems in the folder the longest wins, so `Movie.Part2.en.srt`
+/// belongs to `Movie.Part2.mkv`, not to `Movie.mkv`; media files sharing a stem share it.
+/// Untagged sidecars come first, in [`SUBTITLE_EXTENSIONS`] order, then tagged ones by name.
+/// Each folder is read once. Symlinks and names that are not UTF-8 are ignored.
+pub fn sidecar_subtitles(media: &[PathBuf]) -> Vec<Vec<String>> {
+	let mut folders: HashMap<&Path, HashMap<&str, Vec<usize>>> = HashMap::new();
+	for (i, path) in media.iter().enumerate() {
+		let (Some(dir), Some(stem)) = (path.parent(), path.file_stem().and_then(OsStr::to_str))
+		else {
+			continue;
+		};
+		folders
+			.entry(dir)
+			.or_default()
+			.entry(stem)
+			.or_default()
+			.push(i);
+	}
+	let mut subs = vec![Vec::new(); media.len()];
+	for (dir, stems) in &folders {
+		for name in subtitle_names(dir) {
+			if let Some(owners) = sidecar_owners(&name, stems) {
+				for &i in owners {
+					subs[i].push(name.clone());
+				}
+			}
+		}
+	}
+	for (names, path) in subs.iter_mut().zip(media) {
+		let stem = path.file_stem().and_then(OsStr::to_str).unwrap_or("");
+		names.sort_by_cached_key(|name| sidecar_order(name, stem));
+	}
+	subs
+}
+
+/// Regular files in `dir` with a subtitle extension.
+fn subtitle_names(dir: &Path) -> Vec<String> {
+	let Ok(entries) = std::fs::read_dir(dir) else {
+		return Vec::new();
+	};
+	entries
+		.filter_map(Result::ok)
+		.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+		.filter_map(|entry| entry.file_name().into_string().ok())
+		.filter(|name| subtitle_rank(name).is_some())
+		.collect()
+}
+
+/// Where `name`'s extension sits in [`SUBTITLE_EXTENSIONS`]; None when it is not a subtitle.
+fn subtitle_rank(name: &str) -> Option<usize> {
+	let ext = Path::new(name).extension()?.to_str()?;
+	SUBTITLE_EXTENSIONS
+		.iter()
+		.position(|known| known.eq_ignore_ascii_case(ext))
+}
+
+/// The media files `name` belongs to: its name without the extension as a stem, then that less
+/// its last dot component, then less two. The longest stem is tried first.
+fn sidecar_owners<'a>(name: &str, stems: &'a HashMap<&str, Vec<usize>>) -> Option<&'a Vec<usize>> {
+	let mut base = Path::new(name).file_stem()?.to_str()?;
+	for _ in 0..3 {
+		if let Some(owners) = stems.get(base) {
+			return Some(owners);
+		}
+		base = &base[..base.rfind('.')?];
+	}
+	None
+}
+
+/// Untagged sidecars first, by extension rank; then tagged ones by name.
+fn sidecar_order(name: &str, stem: &str) -> (bool, usize, String) {
+	let tagged = Path::new(name).file_stem().and_then(OsStr::to_str) != Some(stem);
+	let rank = if tagged {
+		0
+	} else {
+		subtitle_rank(name).unwrap_or(0)
+	};
+	(tagged, rank, name.to_owned())
 }
 
 pub fn probe_media(path: &Path) -> MediaInfo {
@@ -1366,6 +1453,76 @@ mod tests {
 			}
 			.resolution_attr(),
 			None
+		);
+	}
+
+	fn touch(dir: &Path, name: &str) -> PathBuf {
+		let path = dir.join(name);
+		fs::write(&path, b"1").unwrap();
+		path
+	}
+
+	#[test]
+	fn sidecar_subtitles_lists_untagged_then_tagged() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = touch(tmp.path(), "Movie.mkv");
+		for name in [
+			"Movie.sv.srt",
+			"Movie.vtt",
+			"Movie.en.forced.srt",
+			"Movie.srt",
+			"Movie.EN.SRT",
+			"Other.srt",
+			"Movie.en.srt.bak",
+			"Movie.a.b.c.srt",
+		] {
+			touch(tmp.path(), name);
+		}
+		assert_eq!(
+			sidecar_subtitles(&[movie]),
+			vec![vec![
+				"Movie.srt",
+				"Movie.vtt",
+				"Movie.EN.SRT",
+				"Movie.en.forced.srt",
+				"Movie.sv.srt",
+			]]
+		);
+		assert!(sidecar_subtitles(&[]).is_empty());
+	}
+
+	#[test]
+	fn sidecar_subtitles_longest_stem_wins_and_shared_stems_share() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = touch(tmp.path(), "Movie.mkv");
+		let part2 = touch(tmp.path(), "Movie.Part2.mkv");
+		let mp4 = touch(tmp.path(), "Movie.mp4");
+		touch(tmp.path(), "Movie.Part2.en.srt");
+		touch(tmp.path(), "Movie.Part2.srt");
+		touch(tmp.path(), "Movie.en.srt");
+		let subs = sidecar_subtitles(&[movie, part2, mp4]);
+		assert_eq!(subs[0], vec!["Movie.en.srt"]);
+		assert_eq!(subs[1], vec!["Movie.Part2.srt", "Movie.Part2.en.srt"]);
+		assert_eq!(subs[2], vec!["Movie.en.srt"]);
+	}
+
+	#[test]
+	fn sidecar_subtitles_keeps_folders_apart_and_skips_symlinks() {
+		let tmp = tempfile::tempdir().unwrap();
+		let a = tmp.path().join("a");
+		let b = tmp.path().join("b");
+		fs::create_dir(&a).unwrap();
+		fs::create_dir(&b).unwrap();
+		let one = touch(&a, "Clip.mp4");
+		let two = touch(&b, "Clip.mp4");
+		let song = touch(&a, "Song.mp3");
+		touch(&a, "Clip.en.srt");
+		touch(&b, "Clip.sv.vtt");
+		#[cfg(unix)]
+		std::os::unix::fs::symlink(a.join("Clip.en.srt"), a.join("Clip.de.srt")).unwrap();
+		assert_eq!(
+			sidecar_subtitles(&[one, two, song]),
+			vec![vec!["Clip.en.srt"], vec!["Clip.sv.vtt"], vec![]]
 		);
 	}
 }
