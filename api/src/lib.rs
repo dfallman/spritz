@@ -67,15 +67,14 @@ pub async fn start_server(
 		sort_media_paths(&mut media_files);
 
 		let records = describe_media(&media_files);
+		let media_subs = spritz_core::sidecar_subtitles(&media_files);
 		let mut media_sizes = Vec::with_capacity(records.len());
 		let mut media_dates = Vec::with_capacity(records.len());
 		let mut media_has_art = Vec::with_capacity(records.len());
-		let mut media_subs = Vec::with_capacity(records.len());
 		for record in records {
 			media_sizes.push(record.size);
 			media_dates.push(record.date);
 			media_has_art.push(record.has_art);
-			media_subs.push(record.subs);
 		}
 
 		let mut folder_nodes = build_folder_tree(&dirs, &media_files);
@@ -420,7 +419,6 @@ struct FileRecord {
 	size: u64,
 	date: String,
 	has_art: bool,
-	subs: u8,
 }
 
 fn file_record(path: &Path) -> FileRecord {
@@ -438,7 +436,6 @@ fn file_record(path: &Path) -> FileRecord {
 		date,
 		has_art: spritz_core::album_art_sidecar(path).is_some()
 			|| spritz_core::has_embedded_art(path),
-		subs: spritz_core::sidecar_subtitle_bits(path),
 	}
 }
 
@@ -1116,20 +1113,15 @@ mod tests {
 	}
 
 	#[test]
-	fn describe_media_keeps_sidecar_bits_aligned() {
+	fn describe_media_keeps_records_aligned() {
 		let tmp = tempfile::tempdir().unwrap();
 		let first = tmp.path().join("a.mp4");
 		let second = tmp.path().join("b.mp3");
 		std::fs::write(&first, b"x").unwrap();
 		std::fs::write(&second, b"y").unwrap();
-		std::fs::write(tmp.path().join("b.srt"), b"1").unwrap();
 		let records = describe_media(&[first, second]);
 		assert_eq!(records.len(), 2);
-		assert_eq!(records[0].subs, 0);
-		assert_eq!(
-			records[1].subs & spritz_core::SUBTITLE_SRT,
-			spritz_core::SUBTITLE_SRT
-		);
+		assert_eq!(records[1].size, 1);
 	}
 
 	#[tokio::test]

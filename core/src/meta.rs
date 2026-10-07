@@ -158,34 +158,6 @@ pub fn album_art_sidecar(media: &Path) -> Option<PathBuf> {
 	None
 }
 
-pub const SUBTITLE_SRT: u8 = 1 << 0;
-pub const SUBTITLE_VTT: u8 = 1 << 1;
-pub const SUBTITLE_ASS: u8 = 1 << 2;
-pub const SUBTITLE_SSA: u8 = 1 << 3;
-
-/// Which sidecar subtitle files sit next to `media`. Symlinks are ignored.
-/// Bits are [`SUBTITLE_SRT`], [`SUBTITLE_VTT`], [`SUBTITLE_ASS`], [`SUBTITLE_SSA`].
-pub fn sidecar_subtitle_bits(media: &Path) -> u8 {
-	let mut bits = 0u8;
-	for (bit, ext) in [
-		(SUBTITLE_SRT, "srt"),
-		(SUBTITLE_VTT, "vtt"),
-		(SUBTITLE_ASS, "ass"),
-		(SUBTITLE_SSA, "ssa"),
-	] {
-		if is_regular_file(&media.with_extension(ext)) {
-			bits |= bit;
-		}
-	}
-	bits
-}
-
-fn is_regular_file(path: &Path) -> bool {
-	std::fs::symlink_metadata(path)
-		.ok()
-		.is_some_and(|meta| !meta.file_type().is_symlink() && meta.is_file())
-}
-
 /// Sidecar subtitle extensions, in the order a media file's untagged sidecars are listed.
 pub const SUBTITLE_EXTENSIONS: [&str; 4] = ["srt", "vtt", "ass", "ssa"];
 
@@ -1190,24 +1162,6 @@ mod tests {
 			inner: std::io::Cursor::new(data),
 		};
 		assert_eq!(flac_duration_from_reader(&mut reader).unwrap(), None);
-	}
-
-	#[test]
-	fn sidecar_subtitle_bits_marks_regular_files_only() {
-		let tmp = tempfile::tempdir().unwrap();
-		let movie = tmp.path().join("clip.mp4");
-		fs::write(&movie, b"x").unwrap();
-		fs::write(tmp.path().join("clip.srt"), b"1").unwrap();
-		fs::write(tmp.path().join("clip.ssa"), b"s").unwrap();
-		#[cfg(unix)]
-		std::os::unix::fs::symlink(tmp.path().join("clip.srt"), tmp.path().join("clip.vtt"))
-			.unwrap();
-		let bits = sidecar_subtitle_bits(&movie);
-		assert_eq!(bits & SUBTITLE_SRT, SUBTITLE_SRT);
-		assert_eq!(bits & SUBTITLE_SSA, SUBTITLE_SSA);
-		assert_eq!(bits & SUBTITLE_ASS, 0);
-		#[cfg(unix)]
-		assert_eq!(bits & SUBTITLE_VTT, 0);
 	}
 
 	#[test]

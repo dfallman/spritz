@@ -639,7 +639,7 @@ fn item_xml(
 		path,
 		public_base,
 		&config.media_dirs,
-		config.media_subs.get(index).copied().unwrap_or(0),
+		config.media_subs.get(index).map_or(&[][..], Vec::as_slice),
 	);
 	let art = if config.media_has_art.get(index).copied().unwrap_or(false) {
 		format!("\n    <upnp:albumArtURI>http://{public_base}/art/{index}</upnp:albumArtURI>")
@@ -663,19 +663,18 @@ fn sidecar_subtitle_res(
 	path: &Path,
 	public_base: &str,
 	media_dirs: &[std::path::PathBuf],
-	bits: u8,
+	names: &[String],
 ) -> String {
 	let mut extra = String::new();
-	for (bit, ext, mime) in [
-		(spritz_core::SUBTITLE_SRT, "srt", "text/srt"),
-		(spritz_core::SUBTITLE_VTT, "vtt", "text/vtt"),
-		(spritz_core::SUBTITLE_ASS, "ass", "text/x-ssa"),
-		(spritz_core::SUBTITLE_SSA, "ssa", "text/x-ssa"),
-	] {
-		if bits & bit == 0 {
+	for name in names {
+		let sub = path.with_file_name(name);
+		let Some(mime) = sub
+			.extension()
+			.and_then(|ext| ext.to_str())
+			.and_then(spritz_core::mime_for_ext)
+		else {
 			continue;
-		}
-		let sub = path.with_extension(ext);
+		};
 		let Some((dir_idx, url_path)) = spritz_core::media_url_path(&sub, media_dirs) else {
 			continue;
 		};
@@ -858,6 +857,7 @@ mod tests {
 		let movie = tmp.path().join("clip.mp4");
 		std::fs::write(&movie, b"x").unwrap();
 		std::fs::write(tmp.path().join("clip.srt"), b"1").unwrap();
+		std::fs::write(tmp.path().join("clip.ssa"), b"1").unwrap();
 
 		let config = DlnaConfig {
 			device_uuid: "u".into(),
@@ -872,7 +872,7 @@ mod tests {
 			media_dates: vec!["2020-01-01".into()],
 			probes: crate::ProbeCache::shared(vec!["0:00:02.000".into()], vec![], vec![]),
 			media_has_art: vec![true],
-			media_subs: vec![spritz_core::SUBTITLE_SRT | spritz_core::SUBTITLE_SSA],
+			media_subs: vec![vec!["clip.srt".into(), "clip.ssa".into()]],
 			video_idx: vec![0],
 			audio_idx: vec![],
 			folder_nodes: vec![],
@@ -892,6 +892,41 @@ mod tests {
 		);
 		assert!(!xml.contains("resolution="), "{xml}");
 		assert!(xml.contains("/art/0"), "{xml}");
+	}
+
+	#[test]
+	fn item_xml_lists_tagged_sidecars_in_order_and_encoded() {
+		let tmp = tempfile::tempdir().unwrap();
+		let movie = tmp.path().join("My Clip.mp4");
+		std::fs::write(&movie, b"x").unwrap();
+		let config = DlnaConfig {
+			device_uuid: "u".into(),
+			friendly_name: "Spritz".into(),
+			http_port: 8080,
+			local_ip: "127.0.0.1".parse().unwrap(),
+			http_ipv4: true,
+			http_ipv6: false,
+			media_dirs: vec![tmp.path().to_path_buf()],
+			media_files: vec![movie.clone()],
+			media_sizes: vec![1],
+			media_dates: vec!["2020-01-01".into()],
+			probes: crate::ProbeCache::empty(1),
+			media_has_art: vec![false],
+			media_subs: vec![vec!["My Clip.srt".into(), "My Clip.en.forced.vtt".into()]],
+			video_idx: vec![0],
+			audio_idx: vec![],
+			folder_nodes: vec![],
+			event_hub: crate::event::EventHub::default(),
+			clients: crate::clients::ClientTracker::default(),
+		};
+		let xml = item_xml(0, &movie, "v:0", "V", &config, "127.0.0.1:8080").unwrap();
+		let untagged = xml.find("/m/0/My%20Clip.srt").expect(&xml);
+		let tagged = xml.find("/m/0/My%20Clip.en.forced.vtt").expect(&xml);
+		assert!(untagged < tagged, "{xml}");
+		assert!(
+			xml.contains(r#"protocolInfo="http-get:*:text/vtt:*""#),
+			"{xml}"
+		);
 	}
 
 	#[test]
@@ -917,7 +952,7 @@ mod tests {
 				vec!["AVC_MP4_HP_HD_AAC".into()],
 			),
 			media_has_art: vec![false],
-			media_subs: vec![0],
+			media_subs: vec![vec![]],
 			video_idx: vec![0],
 			audio_idx: vec![],
 			folder_nodes: vec![],
@@ -948,7 +983,7 @@ mod tests {
 			media_dates: vec!["2020-01-01".into()],
 			probes: crate::ProbeCache::empty(1),
 			media_has_art: vec![false],
-			media_subs: vec![0],
+			media_subs: vec![vec![]],
 			video_idx: vec![0],
 			audio_idx: vec![],
 			folder_nodes: vec![],
