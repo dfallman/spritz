@@ -12,7 +12,7 @@ Spritz sends `ssdp:alive` announcements to `239.255.255.250:1900` (IPv4) and `[F
 
 ## Browse (SOAP)
 
-`POST /upnp/control/contentdirectory` handles `Browse`, `Search`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. The root has three children: `V` (Videos, flat), `A` (Music, flat), and `F` (By folder, recursive). Empty containers are hidden. `<res>` tags include `size=`, `duration=` when the container header can be parsed, `resolution=` when width/height are known, a `DLNA.ORG_PN` only when the probed codec is a known DLNA profile (H.264 bands; HEVC/VP9/AV1 omit the PN rather than lie), and DLNA.ORG flags (`OP=01` byte-seek plus standard streaming flags). Matching sidecar subtitles (`.srt` / `.vtt` / `.ass`) are extra `<res>` URLs. Sidecar covers (`cover.jpg` / same-stem `.jpg`) appear as `<upnp:albumArtURI>` pointing at `/art/{index}`. File responses set `transferMode.dlna.org: Streaming` and `contentFeatures.dlna.org` so Infuse will play them.
+`POST /upnp/control/contentdirectory` handles `Browse`, `Search`, `GetSystemUpdateID`, `GetSearchCapabilities`, and `GetSortCapabilities`. The root has three children: `V` (Videos, flat), `A` (Music, flat), and `F` (By folder, recursive). Empty containers are hidden. `<res>` tags include `size=`, `duration=` when the container header can be parsed, `resolution=` when width/height are known, a `DLNA.ORG_PN` only when the probed codec is a known DLNA profile (H.264 bands; HEVC/VP9/AV1 omit the PN rather than lie), and DLNA.ORG flags (`OP=01` byte-seek plus standard streaming flags). Matching sidecar subtitles (`<stem>.<ext>` and tagged `<stem>.<tag>[.<tag>].<ext>`, found with one listing per folder by `spritz_core::sidecar_subtitles`) are extra `<res>` URLs, untagged first. Sidecar covers (`cover.jpg` / same-stem `.jpg`) appear as `<upnp:albumArtURI>` pointing at `/art/{index}`. File responses set `transferMode.dlna.org: Streaming` and `contentFeatures.dlna.org` so Infuse will play them.
 
 A `SUBSCRIBE` to an event URL is answered with a SID and an immediate HTTP `NOTIFY` carrying the current state variables. `SystemUpdateID` lives in `EventHub` and starts at `1`. The CLI scans once at start, so for it the value never changes. An embedder that swaps the library (Spritz Server) calls `EventHub::content_changed`, which bumps the id, reports it in `GetSystemUpdateID` and in Browse/Search `UpdateID`, and sends a `NOTIFY` (SEQ 1, 2, …) to every live ContentDirectory subscriber.
 
@@ -20,7 +20,7 @@ A `SUBSCRIBE` to an event URL is answered with a SID and an immediate HTTP `NOTI
 
 ## File serving
 
-Each source directory is mounted at `/m/{index}/` and served over HTTP with range support via `tower-http`'s `ServeFile`. Requests that leave the tree, follow a symlink, or use an unknown extension return 404. Sidecar subtitles sharing a stem with an indexed file are reachable so clients can fetch the extra `<res>` URLs. Album art is served at `/art/{index}` from `cover.jpg` / `folder.jpg` / a same-stem image next to the file.
+Each source directory is mounted at `/m/{index}/` and served over HTTP with range support via `tower-http`'s `ServeFile`. Requests that leave the tree, follow a symlink, or use an unknown extension return 404. Sidecar subtitles are reachable like media (any `.srt`, `.vtt`, `.ass`, or `.ssa` inside a source directory) so clients can fetch the extra `<res>` URLs. Album art is served at `/art/{index}` from `cover.jpg` / `folder.jpg` / a same-stem image next to the file.
 
 ## Spritz protocol
 

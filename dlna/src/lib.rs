@@ -49,9 +49,9 @@ pub struct DlnaConfig {
 	pub probes: Arc<RwLock<ProbeCache>>,
 	/// True when a sidecar or embedded cover exists for `/art/{i}`.
 	pub media_has_art: Vec<bool>,
-	/// Sidecar subtitle bitset parallel to `media_files`
-	/// (`spritz_core::SUBTITLE_*`).
-	pub media_subs: Vec<u8>,
+	/// Sidecar subtitle file names parallel to `media_files`, each in its
+	/// media file's folder (`spritz_core::sidecar_subtitles`).
+	pub media_subs: Vec<Vec<String>>,
 	/// Indices into `media_files` for video items (flat Videos container).
 	pub video_idx: Vec<usize>,
 	/// Indices into `media_files` for audio items (flat Music container).

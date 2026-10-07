@@ -5,9 +5,9 @@ use walkdir::WalkDir;
 mod meta;
 mod open;
 pub use meta::{
-	AudioCodec, MediaInfo, SUBTITLE_ASS, SUBTITLE_SRT, SUBTITLE_SSA, SUBTITLE_VTT, VideoCodec,
-	album_art_sidecar, dlna_org_pn, dlna_org_pn_for, format_dlna_duration, has_embedded_art,
-	probe_duration, probe_media, protocol_info, protocol_info_pn, sidecar_subtitle_bits,
+	AudioCodec, MediaInfo, SUBTITLE_EXTENSIONS, VideoCodec, album_art_sidecar, dlna_org_pn,
+	dlna_org_pn_for, format_dlna_duration, has_embedded_art, probe_duration, probe_media,
+	protocol_info, protocol_info_pn, sidecar_subtitles,
 };
 pub use open::open_media_file;
 

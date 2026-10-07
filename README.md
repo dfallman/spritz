@@ -39,7 +39,7 @@ DLNA clients (including most modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox
 - Presents three browse views at the root: `Videos`, `Music`, and `By folder` (the on-disk structure)
 - Supports video and audio formats (MP4/MKV/AVI/MOV/... and MP3/FLAC/OGG/...)
 - Implements `ContentDirectory:1` and `ConnectionManager:1` for DLNA Browse and Search
-- Advertises sidecar subtitles (`.srt` / `.vtt` / `.ass`) next to matching media files
+- Advertises sidecar subtitles (`.srt` / `.vtt` / `.ass` / `.ssa`) next to matching media files, including language-tagged ones (`Movie.en.srt`, `Movie.sv.forced.srt`)
 - Advertises duration, resolution, honest DLNA profile names (from the file, not the extension), and sidecar album art (`cover.jpg` / matching stem)
 - Exposes an M3U playlist at `/spritz` for VLC, Infuse, and similar players
 - Sends `ssdp:byebye` on Ctrl+C so clients drop it immediately
@@ -209,6 +209,8 @@ Point it at `http://<your-spritz-server-ip>:8080/spritz`.
 | `.srt`         | `text/srt`    |
 | `.vtt`         | `text/vtt`    |
 | `.ass`, `.ssa` | `text/x-ssa`  |
+
+A sidecar is `<stem>.<ext>` or carries one or two dot-separated tags before the extension, such as a language and `forced`; when several media files in a folder could own it, the one with the longest name wins.
 
 ## Compatibility
 
