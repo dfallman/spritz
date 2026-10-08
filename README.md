@@ -48,18 +48,16 @@ DLNA clients (including most modern TVs, Apple TV (via Infuse or VLC), PS5, Xbox
 
 Most DLNA and media servers (such as Plex, Jellyfin, Emby, MiniDLNA/ReadyMedia, Rygel, Serviio, and others) are meant to be persistent servers: that is, you install a service, point a config file at your media library, often on a NAS or similar, maintain a database, and leave it running.
 
-Spritz is the opposite — you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. No config files, no database, no indexing and reindexing jobs, and no background services. As we say in Australia, no dramas.
-
-A typical use case for spritz is that you've just downloaded something you want to watch right away, for instance a football game. To make that game available with Spritz, just:
+Spritz is the opposite: you've downloaded a file, you point spritz opportunistically at the folder that file is in, share it for as long as you need, and Ctrl+C when done. 
 
 ```
 cd Downloads
 spritz
 ```
 
-So Spritz isn't a replacement for other media servers; it sits alongside them. 
+No config files, no database, no indexing and reindexing jobs, and no background services. As we say in Australia, no dramas.
 
-Spritz is built for ad hoc sharing, as in folders you don't serve every day. But it also works as a no-nonsense alternative to the heavier servers above. Point it at your NAS's media folder, leave it running, and it does its thing.
+Hence, Spritz isn't so much a replacement for other media servers; it sits alongside them. Spritz is built for ad hoc sharing, as in folders you don't serve every day. That said, Spritz also works as a no-nonsense alternative to the heavier media servers above. Point it at your NAS's media folder, leave it running, and it does its thing.
 
 **Note:** Spritz reads the file tree at startup and doesn't watch it for changes. Hence, if you add files to a share, restart Spritz to rebuild its index. Or, let watchexec do it for you: `watchexec -r -- spritz`. With watchexec, the app restarts and rebuilds its index when it detects change to the shared folder(s). Note however that any active streams are shut down as well, so depending on your use case relying on watchexec might or might not be desirable.  
 
