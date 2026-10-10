@@ -406,7 +406,7 @@ fn search_diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Opti
 		return None;
 	}
 	Some(format!(
-		"{} searched for this server but never connected. Check the firewall on this Mac (port {http_port}).",
+		"{} searched for this server but never connected. Check the firewall on this computer (port {http_port}).",
 		record.label()
 	))
 }
@@ -422,7 +422,7 @@ fn announce_diagnosis(record: &ClientRecord, now: Instant, http_port: u16) -> Op
 		return None;
 	}
 	Some(format!(
-		"{} is on the network but has not connected to this server. Check the firewall on this Mac (port {http_port}).",
+		"{} is on the network but has not connected to this server. Check the firewall on this computer (port {http_port}).",
 		record.label()
 	))
 }
@@ -810,7 +810,7 @@ mod tests {
 		assert_eq!(
 			diagnosis(&r, start + STUCK_AFTER, 8080).as_deref(),
 			Some(
-				"tvOS searched for this server but never connected. Check the firewall on this Mac (port 8080)."
+				"tvOS searched for this server but never connected. Check the firewall on this computer (port 8080)."
 			)
 		);
 	}
@@ -1057,7 +1057,7 @@ mod tests {
 		assert_eq!(
 			diagnosis(&r, start + STUCK_AFTER, 8080).as_deref(),
 			Some(
-				"Den (tvOS 26.0) is on the network but has not connected to this server. Check the firewall on this Mac (port 8080)."
+				"Den (tvOS 26.0) is on the network but has not connected to this server. Check the firewall on this computer (port 8080)."
 			)
 		);
 	}

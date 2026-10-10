@@ -132,7 +132,7 @@ mod tests {
 		assert_eq!(
 			lines,
 			vec![
-				"Client 192.168.1.40: tvOS searched for this server but never connected. Check the firewall on this Mac (port 8080)."
+				"Client 192.168.1.40: tvOS searched for this server but never connected. Check the firewall on this computer (port 8080)."
 			]
 		);
 		assert!(r.lines(&t.snapshot_at(later), later, 8080).is_empty());

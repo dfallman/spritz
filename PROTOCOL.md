@@ -187,8 +187,8 @@ search would clear and re-raise the diagnosis on every one of the Player's 30 s 
 
 | Condition | Text (shape) |
 |-----------|--------------|
-| A Spritz client whose `unanswered_since` is ≥ 15 s ago and whose latest search is ≤ 10 min ago | "{label} searched for this server but never connected. Check the firewall on this Mac (port {port})." |
-| A Spritz client announced (above) for ≥ 15 s, with no HTTP stage in the 2-minute grace before the advertisement appeared | "{label} is on the network but has not connected to this server. Check the firewall on this Mac (port {port})." |
+| A Spritz client whose `unanswered_since` is ≥ 15 s ago and whose latest search is ≤ 10 min ago | "{label} searched for this server but never connected. Check the firewall on this computer (port {port})." |
+| A Spritz client announced (above) for ≥ 15 s, with no HTTP stage in the 2-minute grace before the advertisement appeared | "{label} is on the network but has not connected to this server. Check the firewall on this computer (port {port})." |
 | otherwise | none |
 
 A stuck search is checked first, so it takes precedence: a client that is both announced and

@@ -154,7 +154,7 @@ not get through:
   address, Local Network access denied on macOS, UDP 1900 taken):
 
       Client: Apple TV (tvOS 26.0) at 192.168.1.40 found this server
-      Client 192.168.1.41: tvOS searched for this server but never connected. Check the firewall on this Mac (port 8080).
+      Client 192.168.1.41: tvOS searched for this server but never connected. Check the firewall on this computer (port 8080).
       Client: Apple TV (tvOS 26.6) at 192.168.1.40 is on the network
 
 The full protocol is in [PROTOCOL.md](PROTOCOL.md).
